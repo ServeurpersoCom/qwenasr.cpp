@@ -27,6 +27,10 @@
 #include <cstddef>
 #include <vector>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 struct AudioMelConfig {
   int sample_rate = 16000;
   int n_fft = 400;
