@@ -27,6 +27,10 @@ DUMP = "cpp"
 WAV  = os.path.join(DUMP, "qwenasr-cossim-16k.wav")
 WAV_LONG = os.path.join(DUMP, "qwenasr-cossim-long-16k.wav")
 
+# Flash attention is on by default, matching transcribe and the server. Pass
+# --no-fa to validate the manual F32 decoder path instead.
+FA_ARGS = ["--no-fa"] if "--no-fa" in sys.argv else []
+
 
 def make_signal(seconds=5.0, path=WAV):
     rng = np.random.default_rng(42)
@@ -381,7 +385,7 @@ def stage_thinker():
 
     subprocess.run([THINKER, "--model", MODEL, "--embeds",
                     os.path.join(DUMP, "embeds.bin"), "--tokens", str(T),
-                    "--dump", DUMP, "--no-fa"], check=True)
+                    "--dump", DUMP] + FA_ARGS, check=True)
 
     ref = _qwen3_decode_ref(x, layers, norm_w)
     cpp = np.fromfile(os.path.join(DUMP, "hidden.bin"), dtype=np.float32).reshape(ref.shape)
@@ -407,7 +411,7 @@ def stage_prefix():
 
     subprocess.run([THINKER, "--model", MODEL, "--ids", os.path.join(DUMP, "ids.bin"),
                     "--audio", os.path.join(DUMP, "windowed.bin"), "--audio-pos",
-                    str(audio_pos), "--tokens", str(T), "--dump", DUMP, "--no-fa"],
+                    str(audio_pos), "--tokens", str(T), "--dump", DUMP] + FA_ARGS,
                    check=True)
 
     embed, norm_w, layers = _load_thinker()
