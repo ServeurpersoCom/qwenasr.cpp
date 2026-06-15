@@ -19,6 +19,7 @@
 #include "sampling.h"
 #include "thinker-forward.h"
 #include "thinker-weights.h"
+#include "timer.h"
 
 #include "ggml.h"
 
@@ -286,9 +287,52 @@ void pipeline_asr_free(pipeline_asr *p) {
   delete p;
 }
 
+// Per stage wall clock for one transcription. Every span ends on a device
+// readback, so the measured time includes the GPU work.
+struct AsrPerf {
+  double resample_ms; // host resample to 16k mono, zero when input is 16k
+  double mel_ms;      // mel frontend graph
+  double tower_ms;    // windowed audio tower
+  double build_ms;    // prompt build, token embed, audio splice
+  double prefill_ms;  // thinker prefill over the prompt span
+  double embed_ms;    // per token get_rows roundtrip, summed
+  double decode_ms;   // thinker decode step, summed
+  double total_ms;    // entry to return
+  int n_tokens;       // generated tokens
+  double audio_sec;   // input audio duration
+};
+
+// Route the per stage timings through qa_log at info level.
+static void asr_log_perf(const AsrPerf &p) {
+  const double rtf =
+      p.audio_sec > 0.0 ? (p.total_ms / 1000.0) / p.audio_sec : 0.0;
+  const double ms_tok = p.n_tokens > 0 ? p.decode_ms / (double)p.n_tokens : 0.0;
+  const double tok_s =
+      p.decode_ms > 0.0 ? (double)p.n_tokens / (p.decode_ms / 1000.0) : 0.0;
+
+  qa_log(QA_LOG_INFO, "[Perf] Resample %.1f ms", p.resample_ms);
+  qa_log(QA_LOG_INFO, "[Perf] Mel %.1f ms", p.mel_ms);
+  qa_log(QA_LOG_INFO, "[Perf] Tower %.1f ms", p.tower_ms);
+  qa_log(QA_LOG_INFO, "[Perf] Build %.1f ms (embed + audio splice)",
+         p.build_ms);
+  qa_log(QA_LOG_INFO, "[Perf] Prefill %.1f ms", p.prefill_ms);
+  qa_log(QA_LOG_INFO, "[Perf] Embed %.1f ms (per token get_rows roundtrip)",
+         p.embed_ms);
+  qa_log(QA_LOG_INFO,
+         "[Perf] Decode %.1f ms (%d tokens, %.2f ms/tok, %.1f tok/s)",
+         p.decode_ms, p.n_tokens, ms_tok, tok_s);
+  qa_log(QA_LOG_INFO, "[Perf] Total %.1f ms (audio %.2f s, RTF %.3f)",
+         p.total_ms, p.audio_sec, rtf);
+}
+
 qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
                            int sample_rate, const qa_transcribe_params *params,
                            std::string &text) {
+  Timer t_total;
+  AsrPerf perf = {};
+  perf.audio_sec = (double)n_samples / (double)sample_rate;
+
+  Timer t_re;
   std::vector<float> samples;
   if (sample_rate != kModelSampleRate) {
     int n_out = 0;
@@ -299,14 +343,20 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
   } else {
     samples.assign(pcm, pcm + n_samples);
   }
+  perf.resample_ms = t_re.ms();
 
+  Timer t_mel;
   size_t n_frames = 0;
   std::vector<float> mel = run_mel(p, samples, &n_frames);
+  perf.mel_ms = t_mel.ms();
 
+  Timer t_tower;
   int S = 0;
   std::vector<float> states =
       run_tower(p, p->mel_cfg.n_mels, mel, n_frames, &S);
+  perf.tower_ms = t_tower.ms();
 
+  Timer t_build;
   const std::string language =
       params->language ? resolve_language(params->language) : std::string();
   const std::string context = params->context ? params->context : "";
@@ -317,6 +367,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
   std::vector<float> embed = embed_tokens(p, prompt.ids);
   memcpy(embed.data() + (size_t)prompt.audio_offset * (size_t)hidden,
          states.data(), (size_t)S * (size_t)hidden * sizeof(float));
+  perf.build_ms = t_build.ms();
 
   const int max_new = params->max_new_tokens > 0 ? params->max_new_tokens
                                                  : QA_DEFAULT_MAX_NEW_TOKENS;
@@ -328,6 +379,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     return QA_STATUS_GENERATE_FAILED;
   }
 
+  Timer t_pf;
   ThinkerForwardOutput out;
   if (!thinker_forward_prefill(&p->tw, &kv, p->sched, embed.data(), T,
                                p->flash_attn, p->clamp_fp16, &out)) {
@@ -335,6 +387,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     qa_set_error("pipeline_asr_run: prefill failed");
     return QA_STATUS_GENERATE_FAILED;
   }
+  perf.prefill_ms = t_pf.ms();
 
   // Resolve sampling. seed -1 draws a hardware seed, temperature <= 0 stays
   // greedy argmax. Each token advances the philox subsequence so a fixed seed
@@ -391,17 +444,26 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     }
 
     std::vector<int> one = {next};
+    Timer t_emb;
     std::vector<float> e1 = embed_tokens(p, one);
+    perf.embed_ms += t_emb.ms();
+
+    Timer t_dec;
     if (!thinker_forward_decode(&p->tw, &kv, p->sched, e1.data(), p->flash_attn,
                                 p->clamp_fp16, &out)) {
       kv_cache_free(&kv);
       qa_set_error("pipeline_asr_run: decode failed");
       return QA_STATUS_GENERATE_FAILED;
     }
+    perf.decode_ms += t_dec.ms();
     next = sample();
   }
 
   text = transcript_text();
   kv_cache_free(&kv);
+
+  perf.n_tokens = (int)gen.size();
+  perf.total_ms = t_total.ms();
+  asr_log_perf(perf);
   return QA_STATUS_OK;
 }
