@@ -23,17 +23,84 @@ FEAT  = os.environ.get("QA_FEAT", "../build/qwenasr-feat")
 THINKER = os.environ.get("QA_THINKER", "../build/qwenasr-thinker")
 TRANSCRIBE = os.environ.get("QA_TRANSCRIBE", "../build/qwenasr-transcribe")
 
-# Quant selects the GGUF under test, the safetensors stays the f32 reference.
-QUANT = "BF16"
-if "--quant" in sys.argv and sys.argv.index("--quant") + 1 < len(sys.argv):
-    QUANT = sys.argv[sys.argv.index("--quant") + 1]
-MODEL = f"../models/qwenasr-0.6B-{QUANT}.gguf"
-REF_DIR = "../checkpoints/Qwen3-ASR-0.6B"
-CKPT  = os.path.join(REF_DIR, "model.safetensors")
+def _arg(name, default):
+    if name in sys.argv and sys.argv.index(name) + 1 < len(sys.argv):
+        return sys.argv[sys.argv.index(name) + 1]
+    return default
+
+
+# The GGUF under test selects everything. Dims come from its metadata, the same
+# source the C++ reads, so one code path covers 0.6B and 1.7B. The matching
+# safetensors checkpoint is the f32 reference for the op stages.
+MODEL = _arg("--model", "../models/qwenasr-1.7B-BF16.gguf")
+SIZE = "1.7B" if "1.7B" in MODEL else "0.6B"
+REF_DIR = f"../checkpoints/Qwen3-ASR-{SIZE}"
 DUMP = "cpp"
 WAV  = os.path.join(DUMP, "qwenasr-cossim-16k.wav")
 WAV_LONG = os.path.join(DUMP, "qwenasr-cossim-long-16k.wav")
 EXAMPLE_WAV = "../examples/freeman.wav"
+
+
+def _load_dims(path):
+    from gguf import GGUFReader
+    r = GGUFReader(path)
+    def g(k):
+        fld = r.fields[k]
+        return fld.parts[fld.data[0]].tolist()[0]
+    return {
+        "n_mels": g("qwenasr.audio.num_mel_bins"),
+        "tower_d_model": g("qwenasr.audio.d_model"),
+        "tower_heads": g("qwenasr.audio.encoder_attention_heads"),
+        "tower_layers": g("qwenasr.audio.encoder_layers"),
+        "output_dim": g("qwenasr.audio.output_dim"),
+        "hidden": g("qwenasr.embedding_length"),
+        "layers": g("qwenasr.block_count"),
+        "n_q": g("qwenasr.attention.head_count"),
+        "n_kv": g("qwenasr.attention.head_count_kv"),
+        "head_dim": g("qwenasr.attention.key_length"),
+        "eps": g("qwenasr.attention.layer_norm_rms_epsilon"),
+        "theta": g("qwenasr.rope.freq_base"),
+    }
+
+
+DIMS = _load_dims(MODEL)
+
+
+class _Ref:
+    # Shard aware reader over the safetensors reference. Resolves each tensor to
+    # its shard through the index when the checkpoint is sharded (1.7B), or
+    # reads the single file (0.6B).
+    def __init__(self, ref_dir):
+        import json
+        from safetensors import safe_open
+        self._open = safe_open
+        idx = os.path.join(ref_dir, "model.safetensors.index.json")
+        if os.path.exists(idx):
+            self.wmap = json.load(open(idx, encoding="utf-8"))["weight_map"]
+            self.dir = ref_dir
+            self.single = None
+        else:
+            self.wmap = None
+            self.single = os.path.join(ref_dir, "model.safetensors")
+        self.handles = {}
+
+    def get_tensor(self, name):
+        shard = self.single
+        if self.wmap is not None:
+            shard = os.path.join(self.dir, self.wmap[name])
+        if shard not in self.handles:
+            self.handles[shard] = self._open(shard, framework="pt")
+        return self.handles[shard].get_tensor(name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def ref_open():
+    return _Ref(REF_DIR)
 
 # Flash attention is on by default, matching transcribe and the server. Pass
 # --no-fa to validate the manual F32 decoder path instead.
@@ -88,18 +155,17 @@ def stage_mel():
 def stage_conv_stem():
     import torch
     import torch.nn.functional as F
-    from safetensors import safe_open
 
     subprocess.run([FEAT, "--file", WAV, "--dump", DUMP, "--model", MODEL], check=True)
 
-    with safe_open(CKPT, framework="pt") as f:
+    with ref_open() as f:
         g = lambda n: f.get_tensor("thinker.audio_tower." + n).float()
         w1, b1 = g("conv2d1.weight"), g("conv2d1.bias")
         w2, b2 = g("conv2d2.weight"), g("conv2d2.bias")
         w3, b3 = g("conv2d3.weight"), g("conv2d3.bias")
         wo = g("conv_out.weight")
 
-    mel = np.fromfile(os.path.join(DUMP, "mel.bin"), dtype=np.float32).reshape(128, -1)
+    mel = np.fromfile(os.path.join(DUMP, "mel.bin"), dtype=np.float32).reshape(DIMS["n_mels"], -1)
     x = torch.from_numpy(mel)[None, None]
     x = F.gelu(F.conv2d(x, w1, b1, stride=2, padding=1))
     x = F.gelu(F.conv2d(x, w2, b2, stride=2, padding=1))
@@ -118,12 +184,11 @@ def stage_conv_stem():
 def stage_encoder():
     import torch
     import torch.nn.functional as F
-    from safetensors import safe_open
 
     subprocess.run([FEAT, "--file", WAV, "--dump", DUMP, "--model", MODEL,
                     "--encoder"], check=True)
 
-    d_model, n_head = 896, 14
+    d_model, n_head = DIMS["tower_d_model"], DIMS["tower_heads"]
     head_dim = d_model // n_head
     eps = 1e-5
     p = "thinker.audio_tower."
@@ -134,9 +199,9 @@ def stage_encoder():
             "self_attn_layer_norm.weight", "self_attn_layer_norm.bias",
             "fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias",
             "final_layer_norm.weight", "final_layer_norm.bias"]
-    with safe_open(CKPT, framework="pt") as f:
+    with ref_open() as f:
         g = lambda n: f.get_tensor(p + n).float()
-        layers = [{k: g(f"layers.{l}." + k) for k in keys} for l in range(18)]
+        layers = [{k: g(f"layers.{l}." + k) for k in keys} for l in range(DIMS["tower_layers"])]
         ln_post_w, ln_post_b = g("ln_post.weight"), g("ln_post.bias")
         proj1_w, proj1_b = g("proj1.weight"), g("proj1.bias")
         proj2_w, proj2_b = g("proj2.weight"), g("proj2.bias")
@@ -193,13 +258,12 @@ def stage_encoder():
 def stage_windowed():
     import torch
     import torch.nn.functional as F
-    from safetensors import safe_open
 
     make_signal(seconds=9.0, path=WAV_LONG)
     subprocess.run([FEAT, "--file", WAV_LONG, "--dump", DUMP, "--model", MODEL,
                     "--windowed"], check=True)
 
-    d_model, n_head, n_mels = 896, 14, 128
+    d_model, n_head, n_mels = DIMS["tower_d_model"], DIMS["tower_heads"], DIMS["n_mels"]
     head_dim = d_model // n_head
     eps = 1e-5
     chunk_mel, window_chunks = 100, 8
@@ -211,13 +275,13 @@ def stage_windowed():
             "self_attn_layer_norm.weight", "self_attn_layer_norm.bias",
             "fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias",
             "final_layer_norm.weight", "final_layer_norm.bias"]
-    with safe_open(CKPT, framework="pt") as f:
+    with ref_open() as f:
         g = lambda n: f.get_tensor(p + n).float()
         c1w, c1b = g("conv2d1.weight"), g("conv2d1.bias")
         c2w, c2b = g("conv2d2.weight"), g("conv2d2.bias")
         c3w, c3b = g("conv2d3.weight"), g("conv2d3.bias")
         cow = g("conv_out.weight")
-        layers = [{k: g(f"layers.{l}." + k) for k in keys} for l in range(18)]
+        layers = [{k: g(f"layers.{l}." + k) for k in keys} for l in range(DIMS["tower_layers"])]
         ln_post_w, ln_post_b = g("ln_post.weight"), g("ln_post.bias")
         proj1_w, proj1_b = g("proj1.weight"), g("proj1.bias")
         proj2_w, proj2_b = g("proj2.weight"), g("proj2.bias")
@@ -316,21 +380,20 @@ _THINKER_KEYS = ["input_layernorm.weight", "post_attention_layernorm.weight",
 
 def _load_thinker():
     import torch
-    from safetensors import safe_open
     p = "thinker."
-    with safe_open(CKPT, framework="pt") as f:
+    with ref_open() as f:
         g = lambda n: f.get_tensor(p + n).float()
         embed = g("model.embed_tokens.weight")
         norm_w = g("model.norm.weight")
-        layers = [{k: g(f"model.layers.{l}." + k) for k in _THINKER_KEYS} for l in range(28)]
+        layers = [{k: g(f"model.layers.{l}." + k) for k in _THINKER_KEYS} for l in range(DIMS["layers"])]
     return embed, norm_w, layers
 
 
 def _qwen3_decode_ref(x, layers, norm_w):
     import torch
     import torch.nn.functional as F
-    hidden, n_q, n_kv, head_dim = 1024, 16, 8, 128
-    eps, theta = 1e-6, 1e6
+    hidden, n_q, n_kv, head_dim = DIMS["hidden"], DIMS["n_q"], DIMS["n_kv"], DIMS["head_dim"]
+    eps, theta = DIMS["eps"], DIMS["theta"]
     rep = n_q // n_kv
     T = x.shape[0]
 
@@ -405,7 +468,7 @@ def stage_thinker():
 
 def stage_prefix():
     import torch
-    hidden = 1024
+    hidden = DIMS["hidden"]
     AUDIO_START, AUDIO_END, AUDIO_PH = 151669, 151670, 151676
     audio = np.fromfile(os.path.join(DUMP, "windowed.bin"), dtype=np.float32).reshape(-1, hidden)
     S = audio.shape[0]
