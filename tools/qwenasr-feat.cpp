@@ -285,7 +285,7 @@ static void run_windowed(const GGUFModel &gf, BackendPair bp,
     throw std::runtime_error("audio encoder load failed");
   }
 
-  AudioTowerConfig tcfg;
+  AudioTowerConfig tcfg = audio_tower_config_load(gf);
   std::vector<int> chunk_lengths =
       audio_tower_chunk_lengths((int)n_frames, tcfg);
   const int S = audio_tower_seq_len(chunk_lengths);

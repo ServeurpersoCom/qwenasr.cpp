@@ -40,6 +40,7 @@ struct pipeline_asr {
   BPETokenizer tok;
   AsrSpecials sp;
   AudioMelConfig mel_cfg;
+  AudioTowerConfig tower_cfg;
   bool flash_attn;
   bool clamp_fp16;
 };
@@ -142,7 +143,7 @@ static std::vector<float> run_mel(pipeline_asr *p,
 static std::vector<float> run_tower(pipeline_asr *p, int n_mels,
                                     const std::vector<float> &mel,
                                     size_t n_frames, int *n_states_out) {
-  AudioTowerConfig tcfg;
+  const AudioTowerConfig &tcfg = p->tower_cfg;
   std::vector<int> chunk_lengths =
       audio_tower_chunk_lengths((int)n_frames, tcfg);
   const int S = audio_tower_seq_len(chunk_lengths);
@@ -270,6 +271,7 @@ pipeline_asr *pipeline_asr_load(const pipeline_asr_params &params) {
     qa_throw("pipeline_asr_load: tokenizer load failed");
   }
   p->sp = asr_resolve_specials(p->tok, gf);
+  p->tower_cfg = audio_tower_config_load(gf);
   gf_close(&gf);
   return p;
 }

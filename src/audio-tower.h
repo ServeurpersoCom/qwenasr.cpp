@@ -1,14 +1,15 @@
 #pragma once
 // audio-tower.h: windowed forward of the Qwen3-ASR audio tower. Splits the mel
-// into chunk_mel = 100 frame chunks, runs the conv stem per chunk with the
-// positional table reset per chunk, concatenates the after-cnn frames and runs
-// the encoder with a block-diagonal attention mask over windows of
-// window_aftercnn = chunk_aftercnn * window_chunks = 104 frames. Ties
-// conv-stem.h and audio-enc.h into one graph.
+// into chunk_mel = n_window * 2 frame chunks, runs the conv stem per chunk with
+// the positional table reset per chunk, concatenates the after-cnn frames and
+// runs the encoder with a block-diagonal attention mask over windows of
+// window_aftercnn = chunk_aftercnn * window_chunks frames (100 and 104 on the
+// public checkpoints). Ties conv-stem.h and audio-enc.h into one graph.
 
 #include "audio-enc.h"
 #include "conv-stem.h"
 #include "ggml.h"
+#include "gguf-weights.h"
 
 #include <cmath>
 #include <cstddef>
@@ -16,9 +17,21 @@
 #include <vector>
 
 struct AudioTowerConfig {
-  int chunk_mel = 100;   // n_window * 2
-  int window_chunks = 8; // n_window_infer / chunk_mel
+  int chunk_mel;     // n_window * 2
+  int window_chunks; // n_window_infer / chunk_mel
 };
+
+// Tower windowing read from the GGUF metadata. chunk_mel = n_window * 2,
+// window_chunks = n_window_infer / chunk_mel.
+static AudioTowerConfig audio_tower_config_load(const GGUFModel &gf) {
+  AudioTowerConfig cfg;
+  const int n_window = (int)gf_get_u32(gf, "qwenasr.audio.n_window");
+  const int n_window_infer =
+      (int)gf_get_u32(gf, "qwenasr.audio.n_window_infer");
+  cfg.chunk_mel = n_window * 2;
+  cfg.window_chunks = n_window_infer / cfg.chunk_mel;
+  return cfg;
+}
 
 // after-cnn length of a conv chunk of mel_len frames, three conv2d stride 2
 // kernel 3 pad 1. Matches the reference _get_feat_extract_output_lengths for

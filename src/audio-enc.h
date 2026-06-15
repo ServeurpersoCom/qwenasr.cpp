@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -103,7 +104,13 @@ static bool audio_enc_load(AudioEnc *w, const GGUFModel &gf,
   w->proj1_b = gf_load_tensor_f32(&w->wctx, gf, p + "proj1.bias");
   w->proj2_w = gf_load_tensor_f32(&w->wctx, gf, p + "proj2.weight");
   w->proj2_b = gf_load_tensor_f32(&w->wctx, gf, p + "proj2.bias");
-  return wctx_alloc(&w->wctx, backend);
+  bool ok = wctx_alloc(&w->wctx, backend);
+  fprintf(stderr,
+          "[AudioEnc] Loaded: %d layers, d_model %d, heads %d, head_dim %d, "
+          "FFN %d, output_dim %d\n",
+          w->cfg.n_layer, w->cfg.d_model, w->cfg.n_head,
+          w->cfg.d_model / w->cfg.n_head, w->cfg.ffn, w->cfg.output_dim);
+  return ok;
 }
 
 static void audio_enc_free(AudioEnc *w) {

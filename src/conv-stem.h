@@ -9,6 +9,7 @@
 
 #include "gguf-weights.h"
 
+#include <cstdio>
 #include <string>
 
 struct ConvStem {
@@ -35,7 +36,10 @@ static bool conv_stem_load(ConvStem *s, const GGUFModel &gf,
   s->conv3_w = gf_load_tensor_f32(&s->wctx, gf, p + "conv3.weight");
   s->conv3_b = gf_load_tensor_f32(&s->wctx, gf, p + "conv3.bias");
   s->conv_out = gf_load_tensor_f32(&s->wctx, gf, p + "conv_out.weight");
-  return wctx_alloc(&s->wctx, backend);
+  bool ok = wctx_alloc(&s->wctx, backend);
+  fprintf(stderr, "[ConvStem] Loaded: downsample_hidden %d, d_model %d\n",
+          (int)s->conv1_w->ne[3], (int)s->conv_out->ne[1]);
+  return ok;
 }
 
 static void conv_stem_free(ConvStem *s) {
