@@ -2,7 +2,7 @@
 
 Local AI speech-to-text, powered by GGML. C++17 port of Qwen3-ASR
 (Qwen team, Alibaba). 30 languages and 22 Chinese dialects, any input
-resampled to 16 kHz mono, runs on CPU, CUDA, Vulkan.
+resampled to 16 kHz mono, runs on CPU, CUDA, Vulkan, SYCL.
 
 ## Features
 
@@ -29,6 +29,7 @@ git clone --recurse-submodules https://github.com/ServeurpersoCom/qwenasr.cpp.gi
 cd qwenasr.cpp
 ./buildcuda.sh                   # NVIDIA GPU
 ./buildvulkan.sh                 # AMD/Intel GPU (Vulkan)
+./buildsycl.sh                   # Intel GPU (SYCL)
 ./buildcpu.sh                    # CPU only
 ./buildall.sh                    # all backends, runtime DL loading
 NVCC_CCBIN=g++-13 ./buildcuda.sh # rolling release distros (Arch w/ GCC 16, etc.)
