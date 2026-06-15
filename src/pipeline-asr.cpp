@@ -11,6 +11,7 @@
 #include "backend.h"
 #include "bpe.h"
 #include "conv-stem.h"
+#include "detok-stream.h"
 #include "gguf-weights.h"
 #include "kv-cache.h"
 #include "lang-map.h"
@@ -399,6 +400,14 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
   int64_t subseq = 0;
 
   std::vector<int> gen;
+
+  // Streaming detok feeds one token per step and returns the bytes that
+  // complete a UTF-8 boundary, so a codepoint split across tokens never streams
+  // half. In auto detect mode the decoder emits a "language {Lang}<asr_text>"
+  // preamble first, the asr_text marker resets the segment so only the
+  // transcript reaches the stream and the final result.
+  StreamDetok sd;
+  detok_init(&sd, &p->tok, p->sp.asr_text);
   auto sample = [&]() {
     return sample_top_k_p(out.logits_last.data(), vocab, params->temperature,
                           params->top_k, params->top_p,
@@ -408,36 +417,17 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
 
   int next = sample();
 
-  // In auto detect mode the decoder emits a "language {Lang}<asr_text>"
-  // preamble before the transcript. The transcript is everything after the last
-  // asr_text marker, so forced language runs (marker already in the prompt)
-  // keep the full generation while auto runs drop the preamble.
-  auto transcript_text = [&]() {
-    int start = 0;
-    for (int i = 0; i < (int)gen.size(); i++) {
-      if (gen[i] == p->sp.asr_text) {
-        start = i + 1;
-      }
-    }
-    std::vector<int> tr(gen.begin() + start, gen.end());
-    return bpe_decode(&p->tok, tr);
-  };
-
   for (int step = 0; step < max_new; step++) {
     if (next == p->sp.im_end || next == p->sp.eos) {
       break;
     }
     gen.push_back(next);
 
-    if (params->on_token) {
-      std::string full = transcript_text();
-      if (full.size() > text.size()) {
-        std::string delta = full.substr(text.size());
-        text = full;
-        if (!params->on_token(delta.c_str(), params->user)) {
-          kv_cache_free(&kv);
-          return QA_STATUS_CANCELLED;
-        }
+    std::string delta = detok_feed(&sd, next);
+    if (params->on_token && !delta.empty()) {
+      if (!params->on_token(delta.c_str(), params->user)) {
+        kv_cache_free(&kv);
+        return QA_STATUS_CANCELLED;
       }
     }
 
@@ -452,7 +442,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     next = sample();
   }
 
-  text = transcript_text();
+  text = detok_text(&sd);
   kv_cache_free(&kv);
 
   perf.n_tokens = (int)gen.size();

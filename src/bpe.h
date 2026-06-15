@@ -384,7 +384,8 @@ struct BPETokenizer {
   std::string byte2str[256];                   // byte -> GPT-2 UTF-8 string
   int eos_id;                                  // <|endoftext|>
   int n_vocab;
-  std::vector<std::string> id_to_str; // id -> token_str (reverse vocab)
+  std::vector<std::string> id_to_str;   // id -> token_str (reverse vocab)
+  std::vector<std::string> id_to_bytes; // id -> raw byte expansion, decode unit
 
   // Registered special tokens. Each (str, id) pair is matched verbatim in
   // bpe_encode and emitted as a single id, bypassing the BPE merge passes.
@@ -399,6 +400,15 @@ static void bpe_add_special(BPETokenizer *tok, const std::string &str, int id) {
     }
   }
   tok->specials.emplace_back(str, id);
+}
+
+// Inverse of build_byte_encoder: maps each GPT-2 codepoint string back to the
+// raw byte it stands for.
+static void build_byte_decoder(const std::string byte2str[256],
+                               std::unordered_map<std::string, int> &str2byte) {
+  for (int b = 0; b < 256; b++) {
+    str2byte[byte2str[b]] = b;
+  }
 }
 
 // Load tokenizer from GGUF KV (tokenizer.ggml.tokens + tokenizer.ggml.merges)
@@ -442,6 +452,29 @@ static bool load_bpe_from_gguf(BPETokenizer *tok, const char *gguf_path) {
     if (kv.second >= 0 && kv.second < tok->n_vocab) {
       tok->id_to_str[kv.second] = kv.first;
     }
+  }
+
+  // Precompute the raw byte expansion of every token so decode is a plain
+  // concatenation. Each token string is GPT-2 byte level, so its codepoints map
+  // back through the inverse byte table to the raw bytes once, here.
+  std::unordered_map<std::string, int> str2byte;
+  build_byte_decoder(tok->byte2str, str2byte);
+  tok->id_to_bytes.resize(tok->n_vocab);
+  for (int id = 0; id < tok->n_vocab; id++) {
+    const std::string &s = tok->id_to_str[(size_t)id];
+    std::string raw;
+    raw.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+      int adv = 1;
+      utf8_codepoint(s.c_str() + i, &adv);
+      auto it = str2byte.find(s.substr(i, (size_t)adv));
+      if (it != str2byte.end()) {
+        raw.push_back((char)(unsigned char)it->second);
+      }
+      i += (size_t)adv;
+    }
+    tok->id_to_bytes[(size_t)id] = std::move(raw);
   }
 
   // Resolve eos_id from the vocab itself rather than hard-coding 151643.
@@ -596,52 +629,25 @@ static std::vector<int> bpe_encode(const BPETokenizer *tok,
   return ids;
 }
 
-// Inverse of build_byte_encoder: maps each GPT-2 codepoint string back to the
-// raw byte it stands for.
-static void build_byte_decoder(const std::string byte2str[256],
-                               std::unordered_map<std::string, int> &str2byte) {
-  for (int b = 0; b < 256; b++) {
-    str2byte[byte2str[b]] = b;
+// True when id is a registered special token, dropped on decode.
+static bool bpe_is_special(const BPETokenizer *tok, int id) {
+  for (const auto &sp : tok->specials) {
+    if (sp.second == id) {
+      return true;
+    }
   }
+  return false;
 }
 
-// Detokenize ids to UTF-8 text. Registered special ids are dropped. Each normal
-// token string is GPT-2 byte level encoded, so concatenating the token strings
-// and mapping every codepoint back through the inverse byte table rebuilds the
-// raw byte stream, which is the UTF-8 transcript.
-static std::string bpe_decode(const BPETokenizer *tok,
-                              const std::vector<int> &ids) {
-  std::unordered_map<std::string, int> str2byte;
-  build_byte_decoder(tok->byte2str, str2byte);
-
-  auto is_special = [&](int id) {
-    for (const auto &sp : tok->specials) {
-      if (sp.second == id) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  std::string enc;
-  for (int id : ids) {
-    if (id < 0 || id >= tok->n_vocab || is_special(id)) {
-      continue;
-    }
-    enc += tok->id_to_str[(size_t)id];
+// Append the raw transcript bytes of one token id to out. Special and out of
+// range ids contribute nothing. id_to_bytes holds the byte expansion computed
+// at load, so the append is a plain copy. This is the single decode unit: the
+// streaming detok calls it once per generated token and any batch detok loops
+// it over a sequence, both through this one path.
+static void bpe_decode_append(const BPETokenizer *tok, int id,
+                              std::string &out) {
+  if (id < 0 || id >= tok->n_vocab || bpe_is_special(tok, id)) {
+    return;
   }
-
-  std::string out;
-  out.reserve(enc.size());
-  size_t i = 0;
-  while (i < enc.size()) {
-    int adv = 1;
-    utf8_codepoint(enc.c_str() + i, &adv);
-    auto it = str2byte.find(enc.substr(i, (size_t)adv));
-    if (it != str2byte.end()) {
-      out.push_back((char)(unsigned char)it->second);
-    }
-    i += (size_t)adv;
-  }
-  return out;
+  out += tok->id_to_bytes[(size_t)id];
 }
