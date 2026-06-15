@@ -1,7 +1,7 @@
 #pragma once
 // lang-map.h: language name to ISO ID resolution.
-// Auto-generated table from qwenasr/utils/lang_map.py. Mirrors Python
-// _resolve_language() in OmniVoice: pass-through if input is a valid ISO ID,
+// Auto-generated table from qwenasr/utils/lang_map.py. Resolution mirrors the
+// Python _resolve_language(): pass-through if input is a valid ISO ID,
 // otherwise lowercase + lookup the name in the table. Returns empty string
 // on "none" or unrecognized input, matching the Python None fallback.
 

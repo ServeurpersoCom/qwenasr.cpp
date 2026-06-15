@@ -21,11 +21,19 @@ import numpy as np
 SR   = 16000
 FEAT  = os.environ.get("QA_FEAT", "../build/qwenasr-feat")
 THINKER = os.environ.get("QA_THINKER", "../build/qwenasr-thinker")
-MODEL = "../models/qwenasr-0.6B-BF16.gguf"
-CKPT  = "../checkpoints/Qwen3-ASR-0.6B/model.safetensors"
+TRANSCRIBE = os.environ.get("QA_TRANSCRIBE", "../build/qwenasr-transcribe")
+
+# Quant selects the GGUF under test, the safetensors stays the f32 reference.
+QUANT = "BF16"
+if "--quant" in sys.argv and sys.argv.index("--quant") + 1 < len(sys.argv):
+    QUANT = sys.argv[sys.argv.index("--quant") + 1]
+MODEL = f"../models/qwenasr-0.6B-{QUANT}.gguf"
+REF_DIR = "../checkpoints/Qwen3-ASR-0.6B"
+CKPT  = os.path.join(REF_DIR, "model.safetensors")
 DUMP = "cpp"
 WAV  = os.path.join(DUMP, "qwenasr-cossim-16k.wav")
 WAV_LONG = os.path.join(DUMP, "qwenasr-cossim-long-16k.wav")
+EXAMPLE_WAV = "../examples/freeman.wav"
 
 # Flash attention is on by default, matching transcribe and the server. Pass
 # --no-fa to validate the manual F32 decoder path instead.
@@ -426,6 +434,47 @@ def stage_prefix():
     return cos > 0.9999
 
 
+def stage_transcribe():
+    # End to end on the real example wav. The transcribe binary streams its
+    # [Perf] block and load logs into this log, matching the example script.
+    out_cpp = os.path.join(DUMP, "asr-cpp.txt")
+    cmd = [TRANSCRIBE, "--model", MODEL, "--file", EXAMPLE_WAV,
+           "--lang", "English", "-o", out_cpp] + FA_ARGS
+    print(f"[GGML] Cmd: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+    cpp_text = open(out_cpp, encoding="utf-8").read().strip()
+    print(f"[GGML] Text: {cpp_text!r}")
+
+    # Reference is the real Qwen3-ASR transformers model on the same wav, run
+    # CPU fp32 in this interpreter. Needs transformers 4.57.6 (break-system).
+    import difflib
+    import soundfile as sf
+    import torch
+    from qwen_asr import Qwen3ASRModel
+
+    wav, sr = sf.read(EXAMPLE_WAV, dtype="float32", always_2d=False)
+    if wav.ndim > 1:
+        wav = wav.mean(axis=1).astype(np.float32)
+    asr = Qwen3ASRModel.from_pretrained(REF_DIR, dtype=torch.float32,
+                                        device_map="cpu", max_new_tokens=512)
+    res = asr.transcribe(audio=(wav, int(sr)), language="English",
+                         return_time_stamps=False)
+    ref_text = res[0].text.strip()
+    print(f"[Python] Text: {ref_text!r}")
+
+    import re
+    def words(s):
+        return re.sub(r"[^a-z0-9 ]", " ", s.lower()).split()
+
+    cw, rw = words(cpp_text), words(ref_text)
+    exact = 100.0 if cpp_text == ref_text else 0.0
+    nexact = 100.0 if cw == rw else 0.0
+    ratio = difflib.SequenceMatcher(None, cw, rw, autojunk=False).ratio()
+    print(f"[Cossim] Text exact {exact:.2f}% norm_exact {nexact:.2f}% "
+          f"word_ratio {ratio:.6f}")
+    return ratio > 0.8
+
+
 def main():
     make_signal()
     ok = stage_mel()
@@ -434,6 +483,7 @@ def main():
     ok = stage_windowed() and ok
     ok = stage_thinker() and ok
     ok = stage_prefix() and ok
+    ok = stage_transcribe() and ok
     sys.exit(0 if ok else 1)
 
 

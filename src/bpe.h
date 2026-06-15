@@ -2,8 +2,7 @@
 // bpe.h, Qwen3/GPT-2 byte-level BPE tokenizer (CPU-only, no dependencies)
 // Loads vocab + merges from a GGUF tokenizer payload. Handles byte-level
 // encoding, GPT-2 regex pre-tokenizer, BPE merges, and a registry of
-// verbatim special tokens (endoftext plus any caller-registered tokens
-// such as the OmniVoice style markers).
+// verbatim special tokens (the endoftext sentinel).
 
 #include "gguf.h"
 
@@ -455,57 +454,6 @@ static bool load_bpe_from_gguf(BPETokenizer *tok, const char *gguf_path) {
 
   fprintf(stderr, "[BPE] Loaded from GGUF: %d vocab, %d merges, eos_id=%d\n",
           tok->n_vocab, n_merges, tok->eos_id);
-  return true;
-}
-
-// Read OmniVoice special tokens from KV qwenasr.special.{denoise, lang_*,
-// instruct_*, text_*}. Each id is mapped back to its vocab string and
-// registered through bpe_add_special. The endoftext sentinel is already
-// registered by load_bpe_from_gguf, so it is not enumerated here.
-static bool bpe_load_qwenasr_specials(BPETokenizer *tok,
-                                      const char *gguf_path) {
-  struct gguf_init_params gp = {true, NULL};
-  struct gguf_context *ctx = gguf_init_from_file(gguf_path, gp);
-  if (!ctx) {
-    fprintf(stderr, "[BPE] Failed to open %s for specials\n", gguf_path);
-    return false;
-  }
-
-  static const char *keys[] = {
-      "qwenasr.special.denoise",      "qwenasr.special.lang_start",
-      "qwenasr.special.lang_end",     "qwenasr.special.instruct_start",
-      "qwenasr.special.instruct_end", "qwenasr.special.text_start",
-      "qwenasr.special.text_end",
-  };
-  const int n_keys = (int)(sizeof(keys) / sizeof(keys[0]));
-
-  int n_added = 0;
-  for (int i = 0; i < n_keys; i++) {
-    int64_t k = gguf_find_key(ctx, keys[i]);
-    if (k < 0) {
-      fprintf(stderr, "[BPE] WARNING: missing %s in GGUF\n", keys[i]);
-      continue;
-    }
-    int id = (int)gguf_get_val_u32(ctx, k);
-    if (id < 0 || id >= tok->n_vocab) {
-      fprintf(stderr, "[BPE] WARNING: %s id=%d out of vocab range\n", keys[i],
-              id);
-      continue;
-    }
-    const std::string &s = tok->id_to_str[id];
-    if (s.empty()) {
-      fprintf(stderr, "[BPE] WARNING: %s id=%d has empty vocab string\n",
-              keys[i], id);
-      continue;
-    }
-    bpe_add_special(tok, s, id);
-    n_added++;
-  }
-
-  gguf_free(ctx);
-  fprintf(stderr,
-          "[BPE] Registered %d OmniVoice special tokens (total specials=%zu)\n",
-          n_added, tok->specials.size());
   return true;
 }
 

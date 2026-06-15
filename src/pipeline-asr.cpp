@@ -269,7 +269,6 @@ pipeline_asr *pipeline_asr_load(const pipeline_asr_params &params) {
   if (!load_bpe_from_gguf(&p->tok, params.model_path.c_str())) {
     qa_throw("pipeline_asr_load: tokenizer load failed");
   }
-  bpe_load_qwenasr_specials(&p->tok, params.model_path.c_str());
   p->sp = asr_resolve_specials(p->tok, gf);
   gf_close(&gf);
   return p;

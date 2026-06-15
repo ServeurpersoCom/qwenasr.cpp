@@ -240,12 +240,8 @@ static struct ggml_tensor *gf_load_tensor_f32(WeightCtx *wctx,
     return gf_load_tensor(wctx, gf, name);
   }
 
-  // Bail early on unsupported types (before creating tensor in ctx)
+  // Quantized types load natively, GGML dequantizes them at compute time.
   if (src->type != GGML_TYPE_BF16 && src->type != GGML_TYPE_F16) {
-    fprintf(stderr,
-            "[GGUF] WARNING: gf_load_tensor_f32 unsupported type %d for '%s', "
-            "loading as-is\n",
-            src->type, name.c_str());
     return gf_load_tensor(wctx, gf, name);
   }
 
