@@ -16,6 +16,7 @@
 #include "lang-map.h"
 #include "prompt-asr.h"
 #include "qa-error.h"
+#include "sampling.h"
 #include "thinker-forward.h"
 #include "thinker-weights.h"
 
@@ -23,6 +24,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <vector>
 
 // Mel frontend runs at this fixed rate, inputs at other rates are resampled.
@@ -237,18 +239,6 @@ static std::vector<float> embed_tokens(pipeline_asr *p,
   return host;
 }
 
-static int argmax(const std::vector<float> &logits) {
-  int best = 0;
-  float best_v = logits[0];
-  for (int i = 1; i < (int)logits.size(); i++) {
-    if (logits[i] > best_v) {
-      best_v = logits[i];
-      best = i;
-    }
-  }
-  return best;
-}
-
 pipeline_asr *pipeline_asr_load(const pipeline_asr_params &params) {
   pipeline_asr *p = new pipeline_asr();
   p->flash_attn = params.flash_attn;
@@ -346,8 +336,26 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     return QA_STATUS_GENERATE_FAILED;
   }
 
+  // Resolve sampling. seed -1 draws a hardware seed, temperature <= 0 stays
+  // greedy argmax. Each token advances the philox subsequence so a fixed seed
+  // reproduces the same draw.
+  int64_t seed = params->seed;
+  if (seed < 0) {
+    std::random_device rd;
+    seed = ((int64_t)rd() << 32) ^ (int64_t)rd();
+  }
+  const int vocab = (int)out.logits_last.size();
+  int64_t subseq = 0;
+
   std::vector<int> gen;
-  int next = argmax(out.logits_last);
+  auto sample = [&]() {
+    return sample_top_k_p(out.logits_last.data(), vocab, params->temperature,
+                          params->top_k, params->top_p,
+                          params->repetition_penalty, gen.data(),
+                          (int)gen.size(), seed, subseq++, nullptr);
+  };
+
+  int next = sample();
 
   // In auto detect mode the decoder emits a "language {Lang}<asr_text>"
   // preamble before the transcript. The transcript is everything after the last
@@ -390,7 +398,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
       qa_set_error("pipeline_asr_run: decode failed");
       return QA_STATUS_GENERATE_FAILED;
     }
-    next = argmax(out.logits_last);
+    next = sample();
   }
 
   text = transcript_text();

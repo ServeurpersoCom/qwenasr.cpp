@@ -125,6 +125,7 @@ static void asr_handle_transcriptions(const server_config &cfg,
 
   const std::string language = asr_field(req, "language");
   const std::string prompt = asr_field(req, "prompt");
+  const std::string temp = asr_field(req, "temperature");
   std::string format = asr_field(req, "response_format");
   if (format.empty()) {
     format = "json";
@@ -133,6 +134,9 @@ static void asr_handle_transcriptions(const server_config &cfg,
   struct qa_transcribe_params tp = qa_transcribe_default_params();
   tp.language = !language.empty() ? language.c_str() : cfg.language.c_str();
   tp.context = !prompt.empty() ? prompt.c_str() : nullptr;
+  if (!temp.empty()) {
+    tp.temperature = (float)atof(temp.c_str());
+  }
 
   char *text = nullptr;
   qa_status rc;

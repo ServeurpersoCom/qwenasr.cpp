@@ -31,6 +31,16 @@ static void print_usage(const char *prog) {
       "  --max-tokens <n>        Decode budget in tokens (default: 512)\n"
       "  -o <path>               Write transcript to a file instead of "
       "stdout\n\n"
+      "Sampling (greedy by default, matching the reference):\n"
+      "  --temp <t>              Temperature, <= 0 stays greedy (default: 0)\n"
+      "  --top-k <k>             Keep the top k logits, 0 disables (default: "
+      "0)\n"
+      "  --top-p <p>             Nucleus probability, 1.0 disables (default: "
+      "1.0)\n"
+      "  --rep-pen <r>           Repetition penalty, 1.0 is a no-op (default: "
+      "1.0)\n"
+      "  --seed <n>              PRNG seed, -1 draws a random one (default: "
+      "-1)\n\n"
       "Debug:\n"
       "  --clamp-fp16            Clamp hidden states to FP16 range\n"
       "  --no-fa                 Disable flash attention\n"
@@ -51,6 +61,11 @@ static int main_impl(int argc, char **argv) {
   const char *out_path = nullptr;
   const char *dump_dir = nullptr;
   int max_tokens = 0;
+  float temperature = 0.0f;
+  int top_k = 0;
+  float top_p = 1.0f;
+  float rep_pen = 1.0f;
+  long long seed = -1;
   bool clamp_fp16 = false;
   bool flash_attn = true;
 
@@ -65,6 +80,16 @@ static int main_impl(int argc, char **argv) {
       context = argv[++i];
     } else if (strcmp(argv[i], "--max-tokens") == 0 && i + 1 < argc) {
       max_tokens = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--temp") == 0 && i + 1 < argc) {
+      temperature = (float)atof(argv[++i]);
+    } else if (strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) {
+      top_k = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--top-p") == 0 && i + 1 < argc) {
+      top_p = (float)atof(argv[++i]);
+    } else if (strcmp(argv[i], "--rep-pen") == 0 && i + 1 < argc) {
+      rep_pen = (float)atof(argv[++i]);
+    } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+      seed = atoll(argv[++i]);
     } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
       out_path = argv[++i];
     } else if (strcmp(argv[i], "--clamp-fp16") == 0) {
@@ -111,6 +136,11 @@ static int main_impl(int argc, char **argv) {
   struct qa_transcribe_params tp = qa_transcribe_default_params();
   tp.language = lang;
   tp.context = context;
+  tp.temperature = temperature;
+  tp.top_k = top_k;
+  tp.top_p = top_p;
+  tp.repetition_penalty = rep_pen;
+  tp.seed = seed;
   if (max_tokens > 0) {
     tp.max_new_tokens = max_tokens;
   }

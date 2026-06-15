@@ -108,6 +108,14 @@ struct qa_transcribe_params {
   qa_token_cb on_token;
   void *user;
   const char *context; // optional system text for biasing, NULL for none
+  // Sampling. temperature <= 0 is greedy argmax, matching the Qwen3-ASR
+  // reference default. top_k 0 and top_p 1.0 disable those filters,
+  // repetition_penalty 1.0 is a no-op. seed == -1 draws a hardware random seed.
+  float temperature;
+  int top_k;
+  float top_p;
+  float repetition_penalty;
+  int64_t seed;
 };
 
 QA_API struct qa_transcribe_params qa_transcribe_default_params(void);

@@ -94,6 +94,11 @@ struct qa_transcribe_params qa_transcribe_default_params(void) {
   p.on_token = nullptr;
   p.user = nullptr;
   p.context = nullptr;
+  p.temperature = 0.0f;
+  p.top_k = 0;
+  p.top_p = 1.0f;
+  p.repetition_penalty = 1.0f;
+  p.seed = -1;
   return p;
 }
 
