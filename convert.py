@@ -35,6 +35,23 @@ def read_sf_header(path):
     meta.pop("__metadata__", None)
     return meta, 8 + n
 
+# resolve the safetensors shards of a checkpoint. A single model.safetensors, or
+# the model-0000N-of-0000M.safetensors files referenced by the index weight_map.
+def resolve_shards(ckpt_dir):
+    single = os.path.join(ckpt_dir, "model.safetensors")
+    if os.path.isfile(single):
+        return [single]
+    index = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    if not os.path.isfile(index):
+        return []
+    with open(index, "r", encoding="utf-8") as f:
+        weight_map = json.load(f)["weight_map"]
+    names = []
+    for fn in weight_map.values():
+        if fn not in names:
+            names.append(fn)
+    return [os.path.join(ckpt_dir, fn) for fn in names]
+
 # map a HF tensor name to the llama.cpp convention. Raises on any unexpected
 # name so a checkpoint layout change is caught loudly.
 _LM_LEAF = {
@@ -161,12 +178,12 @@ def add_tokenizer(w, ckpt_dir, tag):
 def convert(size):
     tag = size
     ckpt_dir = os.path.join(SCRIPT_DIR, "checkpoints", "Qwen3-ASR-%s" % size)
-    sf_path = os.path.join(ckpt_dir, "model.safetensors")
     cfg_path = os.path.join(ckpt_dir, "config.json")
     out_path = os.path.join(SCRIPT_DIR, "models", "qwenasr-%s-BF16.gguf" % size)
 
-    if not os.path.isfile(sf_path):
-        log(tag, "missing %s, run checkpoints.sh first" % sf_path)
+    shards = resolve_shards(ckpt_dir)
+    if not shards:
+        log(tag, "missing safetensors in %s, run checkpoints.sh first" % ckpt_dir)
         sys.exit(1)
     if os.path.exists(out_path):
         log(tag, "skip: %s exists" % os.path.basename(out_path))
@@ -215,12 +232,13 @@ def convert(size):
 
     add_tokenizer(w, ckpt_dir, tag)
 
-    meta, hdr_size = read_sf_header(sf_path)
     n_tensors, n_bytes = 0, 0
-    for name in sorted(meta.keys()):
-        out_name = rename_tensor(name)
-        n_bytes += add_tensor_passthrough(w, out_name, sf_path, hdr_size, meta[name])
-        n_tensors += 1
+    for sf_path in shards:
+        meta, hdr_size = read_sf_header(sf_path)
+        for name in sorted(meta.keys()):
+            out_name = rename_tensor(name)
+            n_bytes += add_tensor_passthrough(w, out_name, sf_path, hdr_size, meta[name])
+            n_tensors += 1
     log(tag, "tensors: %d, %.1f MB" % (n_tensors, n_bytes / (1 << 20)))
 
     w.write_header_to_file()

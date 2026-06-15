@@ -34,7 +34,7 @@ struct AudioEncLayer {
 
 struct AudioEnc {
   AudioEncConfig cfg;
-  AudioEncLayer layers[18];
+  std::vector<AudioEncLayer> layers;
   struct ggml_tensor *ln_post_w, *ln_post_b;
   struct ggml_tensor *proj1_w, *proj1_b;
   struct ggml_tensor *proj2_w, *proj2_b;
@@ -68,6 +68,13 @@ static void audio_enc_compute_pe(int channels, int length,
 // harness).
 static bool audio_enc_load(AudioEnc *w, const GGUFModel &gf,
                            ggml_backend_t backend) {
+  w->cfg.d_model = (int)gf_get_u32(gf, "qwenasr.audio.d_model");
+  w->cfg.n_head = (int)gf_get_u32(gf, "qwenasr.audio.encoder_attention_heads");
+  w->cfg.n_layer = (int)gf_get_u32(gf, "qwenasr.audio.encoder_layers");
+  w->cfg.ffn = (int)gf_get_u32(gf, "qwenasr.audio.encoder_ffn_dim");
+  w->cfg.output_dim = (int)gf_get_u32(gf, "qwenasr.audio.output_dim");
+  w->layers.resize((size_t)w->cfg.n_layer);
+
   wctx_init(&w->wctx, w->cfg.n_layer * 16 + 6);
   const std::string p = "thinker.audio.";
   for (int l = 0; l < w->cfg.n_layer; l++) {
