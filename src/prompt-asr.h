@@ -53,9 +53,9 @@ struct AsrPrompt {
 //   <|im_start|>user\n<|audio_start|>{audio}<|audio_end|><|im_end|>\n
 //   <|im_start|>assistant\n[language {language}<asr_text>]
 // Literal text runs through the BPE encoder, special tokens emit single ids.
-// language is the ISO id resolved by the caller, empty for auto detect. When
-// set the decoder is primed with the forced language tag, otherwise it detects
-// the language itself.
+// language is the canonical name resolved by the caller, empty for auto detect.
+// When set the decoder is primed with the forced language tag, otherwise it
+// detects the language itself.
 static AsrPrompt asr_build_prompt(const BPETokenizer &tok,
                                   const AsrSpecials &sp,
                                   const std::string &context,
