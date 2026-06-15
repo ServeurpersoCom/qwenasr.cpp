@@ -136,7 +136,7 @@ static void audio_mel_compute_constants(const AudioMelConfig &cfg,
 // Build the mel graph. The constants live as caller owned graph inputs,
 // matching the sibling qwentts.cpp frontend.
 //
-// Inputs :
+// Inputs:
 //   audio_padded [T_padded]          f32, reflect padded by the caller
 //   hann         [n_fft]             f32 host constant
 //   dft_real     [n_fft, n_freq]     f32 host constant

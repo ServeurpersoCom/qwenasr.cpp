@@ -1,31 +1,119 @@
 # qwenasr.cpp
 
-Minimalist C++ / GGML port of Qwen3-ASR. Native wav -> text
+Local AI speech-to-text, powered by GGML. C++17 port of Qwen3-ASR
+(Qwen team, Alibaba). 30 languages and 22 Chinese dialects, any input
+resampled to 16 kHz mono, runs on CPU, CUDA, Vulkan.
 
-## Pipeline
+## Features
 
-    pcm -> log-mel (real FFT) -> conv2d stem -> audio encoder
-        -> audio prefix -> Qwen3 Thinker decoder (KV cache) -> BPE detokenize
-
-Both model sizes are first class: 0.6B for the embedded target, 1.7B for top
-quality. Dimensions come from the GGUF metadata, one code path for both.
-
-## Layout
-
-    src/        modules (mel, conv-stem, audio-enc, qwen3-decoder, pipeline-asr)
-    src/qwenasr.h   public C ABI (qa_*), parsed directly by bindings
-    tools/      qwenasr-transcribe, qwenasr-feat, asr-server, quantize
-    tests/      abi-c.c, cossim harness vs ../../Qwen3-ASR
-    ggml/       submodule, ServeurpersoCom/ggml fork
+- Native audio -> text, any sample rate and channel count resampled
+  and downmixed to 16 kHz mono
+- Two model sizes, 0.6B for the embedded target and 1.7B for top
+  quality, one code path with every dimension read from the GGUF
+  metadata
+- Audio tower: log-mel real FFT -> conv2d stem -> windowed Whisper
+  style encoder, spliced into the decoder as an audio prefix
+- Qwen3 Thinker decoder: KV cached, NEOX RoPE, GQA with qk-norm,
+  SwiGLU, flash attention, greedy decode to im_end
+- Language auto detection or a forced hint, plus an optional system
+  context for biasing
+- Q8_0 and Q4_K_M quantisation of both sizes, derived from the BF16
+  base
+- Two CLI tools: `qwenasr-transcribe` (audio -> text) and `asr-server`
+  (OpenAI `/v1/audio/transcriptions`)
 
 ## Build
 
-    git submodule update --init --recursive
-    ./buildcuda.sh        # or buildcpu.sh / buildvulkan.sh
+```
+git clone --recurse-submodules https://github.com/ServeurpersoCom/qwenasr.cpp.git
+cd qwenasr.cpp
+./buildcuda.sh                   # NVIDIA GPU
+./buildvulkan.sh                 # AMD/Intel GPU (Vulkan)
+./buildcpu.sh                    # CPU only
+./buildall.sh                    # all backends, runtime DL loading
+NVCC_CCBIN=g++-13 ./buildcuda.sh # rolling release distros (Arch w/ GCC 16, etc.)
+```
 
-## Models
+## Model conversion
 
-    ./checkpoints.sh      # Qwen/Qwen3-ASR-0.6B and 1.7B
-    ./convert.py --size 0.6B
-    ./convert.py --size 1.7B
-    ./quantize.sh         # derive Q8_0 / Q4_K_M from the BF16 base
+```
+./checkpoints.sh      # hf download Qwen/Qwen3-ASR-0.6B and 1.7B -> checkpoints/
+./convert.py          # BF16 GGUF for both sizes -> models/
+./quantize.sh         # Q8_0 and Q4_K_M derived from the BF16 base
+```
+
+The BF16 GGUF is the source of truth (the Qwen3-ASR checkpoint is BF16),
+so quantize derives only Q8_0 and Q4_K_M. Every step skips outputs that
+already exist.
+
+## Quick start
+
+Each block is the command run by the matching script in `examples/`.
+
+Transcribe a file (`transcribe.sh`):
+
+```
+./build/qwenasr-transcribe \
+    --model models/qwenasr-1.7B-BF16.gguf \
+    --file freeman.wav \
+    --lang English -o output.txt
+```
+
+OpenAI-compatible server (`server.sh`):
+
+```
+./build/asr-server \
+    --model models/qwenasr-1.7B-BF16.gguf \
+    --host 127.0.0.1 --port 8090
+```
+
+Client call (`client.sh`):
+
+```
+curl -s -X POST http://127.0.0.1:8090/v1/audio/transcriptions \
+    -F file=@freeman.wav \
+    -F response_format=json
+```
+
+Language is auto detected when `--lang` is omitted. Pass `--context`
+(CLI) or the `prompt` field (server) to bias the transcript.
+
+## Embedding the library
+
+The CLI tools are thin wrappers over a public ABI. Single-header,
+single-name-prefix, plain C linkage so that C, C++, Python ctypes,
+Rust bindgen and Go cgo all consume it the same way.
+
+```c
+#include "qwenasr.h"
+
+struct qa_init_params iparams = qa_init_default_params();
+iparams.model_path = "models/qwenasr-1.7B-BF16.gguf";
+
+struct qa_context * ctx = qa_init(&iparams);
+
+struct qa_transcribe_params params = qa_transcribe_default_params();
+params.language = "English"; /* NULL for auto detect */
+
+/* samples is the caller's mono f32 audio, resampled to 16 kHz internally */
+char * text = NULL;
+qa_transcribe(ctx, samples, n_samples, sample_rate, &params, &text);
+/* text is a NUL terminated UTF-8 transcript */
+qa_free_text(text);
+qa_free(ctx);
+```
+
+`tests/abi-c.c` is built with `-std=c99 -Wall -Werror -pedantic` on
+every build (the `test-abi-c` target), so any regression that breaks
+plain C consumability fails the build, not just an opt-in target.
+
+For a binding-friendly shared library (libqwenasr.so / .dll / .dylib),
+configure with `cmake -DQWENASR_SHARED=ON ...`. The shared target
+exports only the `qa_*` symbols; every internal `pipeline_*` and
+`backend_*` stays hidden inside the .so.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+Upstream model: Qwen3-ASR by Alibaba / Qwen team, Apache 2.0.

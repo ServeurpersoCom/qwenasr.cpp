@@ -39,7 +39,7 @@ struct server_config {
   bool flash_attn = true;
 };
 
-// Single GPU context : transcription is serialized FIFO across connections.
+// Single GPU context: transcription is serialized FIFO across connections.
 static std::mutex g_infer_mutex;
 static httplib::Server *g_svr = nullptr;
 static qa_context *g_ctx = nullptr;
