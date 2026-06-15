@@ -65,7 +65,7 @@ static ggml_backend_t cpu_backend_new(int n_threads) {
 
 // Initialize backends: load all available (CUDA, Metal, Vulkan...),
 // pick the best one, keep CPU as fallback.
-// label: log prefix, e.g. "DiT", "VAE", "LM"
+// label: log prefix, e.g. "Pipeline", "Audio", "Thinker"
 // Subsequent calls reuse the same backend (single VMM pool). Returns a
 // BackendPair with .backend == NULL when initialisation fails; the caller
 // must check this before passing it to any pipeline_*_load.

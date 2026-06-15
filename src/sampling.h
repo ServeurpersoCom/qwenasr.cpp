@@ -1,16 +1,12 @@
 #pragma once
-// sampling.h: token sampling for the Talker LM and the CodePredictor MTP
-// head. Pipeline matches the HuggingFace generate() chain in F32 :
+// sampling.h: token sampling for the Qwen3 Thinker decoder. Pipeline matches
+// the HuggingFace generate() chain in F32 :
 //   repetition_penalty -> temperature -> top_k -> top_p -> softmax ->
 //   multinomial
 // The multinomial uniform draw comes from philox_uniform_fill so the
 // sequence stays byte for byte aligned with the patched torch.multinomial
-// in tests/debug-tts-cossim.py.
-//
-// apply_suppress is exposed separately so callers can mask the codec
-// reserved range before invoking the sampler. The Talker masks
-// [vocab - 1024, vocab) except codec_eos before calling sample_top_k_p,
-// the CodePredictor does not need any suppression.
+// in tests/debug-asr-cossim.py. temperature <= 0 short circuits to greedy
+// argmax, the Qwen3-ASR reference default.
 
 #include "philox.h"
 
@@ -24,23 +20,6 @@ struct TokenProb {
   int id;
   float prob;
 };
-
-// Mask logits in [lo, hi) to -inf, except keep is left untouched.
-static inline void apply_suppress(float *logits, int V, int lo, int hi,
-                                  int keep) {
-  if (lo < 0) {
-    lo = 0;
-  }
-  if (hi > V) {
-    hi = V;
-  }
-  for (int i = lo; i < hi; i++) {
-    if (i == keep) {
-      continue;
-    }
-    logits[i] = -INFINITY;
-  }
-}
 
 // Repetition penalty over unique tokens in history (HF rule):
 //   if score >= 0 -> score / penalty

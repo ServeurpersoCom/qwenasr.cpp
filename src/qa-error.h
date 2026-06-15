@@ -13,7 +13,7 @@
 // truncated, never split. Passing NULL as fmt clears the slot.
 //
 // qa_throw is the load-path counterpart: functions deep inside the GGUF
-// reader and the audio tokenizer load chain cannot return false up 97 call
+// reader and the weight load chain cannot return false up 97 call
 // sites without a massive cascade. They throw a std::runtime_error instead,
 // which the ABI boundary entries (qa_init, qa_transcribe) catch and
 // convert into qa_set_error + a negative qa_status. Exceptions never
@@ -38,7 +38,7 @@ void qa_set_error_v(const char *fmt, va_list ap);
 
 // Throws std::runtime_error formatted with printf semantics. Tagged
 // noreturn so the compiler can prune unreachable branches at the call
-// site. Designed for the GGUF / codec load path where any failure means
+// site. Designed for the GGUF / model load path where any failure means
 // the model is unusable and unwinding to the ABI boundary is the only
 // sane recovery.
 [[noreturn]] void qa_throw(const char *fmt, ...)

@@ -1,8 +1,8 @@
 #pragma once
-// kv-cache.h: persistent per-layer KV cache for the Talker LM and the
-// Code Predictor. Mirrors the standard llama.cpp ring approach but kept
-// minimal: the cache is sized at init for a fixed max sequence length
-// and never reallocates. Reset just rewinds cur_len to 0.
+// kv-cache.h: persistent per-layer KV cache for the Qwen3 Thinker decoder.
+// Mirrors the standard llama.cpp ring approach but kept minimal: the cache
+// is sized at init for a fixed max sequence length and never reallocates.
+// Reset just rewinds cur_len to 0.
 //
 // Layout per layer, both K and V :
 //   ggml_tensor [hd, max_seq_len, n_kv] f32, contiguous on hd
