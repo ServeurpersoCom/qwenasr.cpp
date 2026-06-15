@@ -41,8 +41,7 @@ static void print_usage(const char *prog) {
       "--model)\n"
       "  --pad-30s      Pad or trim to 480000 samples like the reference "
       "extractor\n\n"
-      "Dumps: mel.bin, stem.bin, encoder.bin, windowed.bin. Backend follows "
-      "the GGML_BACKEND env var.\n",
+      "Dumps: mel.bin, stem.bin, encoder.bin, windowed.bin.\n",
       prog);
 }
 

@@ -3,13 +3,7 @@
 # Each BF16 model under models/ is quantized to Q8_0 and Q4_K_M. BF16 is the
 # source here (the Qwen3-ASR checkpoint is BF16), so it is not re-derived.
 #
-# Two variants cover the useful range : Q8_0 as the near lossless balanced
-# default, Q4_K_M as the smallest variant that still transcribes correctly.
-#
-# Quantization policy is centralized in tools/quantize.cpp should_quantize :
-# attn_v and ffn_down carry the variant type (plus attn_output on the lighter
-# variants), token_embd takes the embed type for a get_rows safe layout, and
-# norms, biases and conv kernels stay at their source dtype.
+# The per tensor target type policy lives in tools/quantize.cpp.
 
 set -eu
 

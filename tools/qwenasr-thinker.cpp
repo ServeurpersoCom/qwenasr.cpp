@@ -5,7 +5,7 @@
 //                   --audio <bin> --audio-pos <p> splice the audio states
 //                   [S, hidden] into rows [p, p + S).
 // Runs a KV cached prefill and dumps the final hidden [T, hidden] and the last
-// token logits [vocab]. Backend follows the GGML_BACKEND env var.
+// token logits [vocab].
 
 #include "backend.h"
 #include "kv-cache.h"
@@ -44,9 +44,9 @@ static void print_usage(const char *prog) {
       "+ "
       "S)\n"
       "  --no-fa            Disable flash attention, use the manual F32 "
-      "path\n\n"
-      "Dumps: hidden.bin [T, hidden], logits.bin [vocab]. Backend follows the "
-      "GGML_BACKEND env var.\n",
+      "path\n"
+      "  --clamp-fp16       Clamp hidden states to FP16 range\n\n"
+      "Dumps: hidden.bin [T, hidden], logits.bin [vocab].\n",
       prog);
 }
 
@@ -151,6 +151,7 @@ static int main_impl(int argc, char **argv) {
   int T = 0;
   int audio_pos = 0;
   bool no_fa = false;
+  bool clamp = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
       model = argv[++i];
@@ -168,6 +169,8 @@ static int main_impl(int argc, char **argv) {
       dump = argv[++i];
     } else if (strcmp(argv[i], "--no-fa") == 0) {
       no_fa = true;
+    } else if (strcmp(argv[i], "--clamp-fp16") == 0) {
+      clamp = true;
     } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       print_usage(argv[0]);
       return 0;
@@ -224,7 +227,7 @@ static int main_impl(int argc, char **argv) {
   }
 
   ThinkerForwardOutput out;
-  if (!thinker_forward_prefill(&tw, &kv, sched, embed.data(), T, !no_fa, false,
+  if (!thinker_forward_prefill(&tw, &kv, sched, embed.data(), T, !no_fa, clamp,
                                &out)) {
     throw std::runtime_error("prefill failed");
   }

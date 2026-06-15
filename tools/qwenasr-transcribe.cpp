@@ -34,8 +34,7 @@ static void print_usage(const char *prog) {
       "Debug:\n"
       "  --clamp-fp16            Clamp hidden states to FP16 range\n"
       "  --no-fa                 Disable flash attention\n"
-      "  --dump <dir>            Dump intermediate tensors (f32) to <dir>\n\n"
-      "Backend follows the GGML_BACKEND env var, CPU otherwise.\n",
+      "  --dump <dir>            Dump intermediate tensors (f32) to <dir>\n",
       prog);
 }
 

@@ -244,8 +244,7 @@ static void print_usage(const char *prog) {
       "  --port <n>         Bind port (default: 8090)\n"
       "  --lang <code>      Default language hint (default: auto detect)\n"
       "  --clamp-fp16       Clamp hidden states to FP16 range\n"
-      "  --no-fa            Disable flash attention\n\n"
-      "Backend follows the GGML_BACKEND env var, CPU otherwise.\n",
+      "  --no-fa            Disable flash attention\n",
       prog);
 }
 
@@ -268,7 +267,7 @@ static int main_impl(int argc, char **argv) {
       print_usage(argv[0]);
       return 0;
     } else {
-      fprintf(stderr, "[Server] ERROR: unknown arg: %s\n", argv[i]);
+      fprintf(stderr, "[CLI] ERROR: unknown arg: %s\n", argv[i]);
       print_usage(argv[0]);
       return 2;
     }
@@ -285,7 +284,7 @@ static int main_impl(int argc, char **argv) {
 
   g_ctx = qa_init(&ip);
   if (!g_ctx) {
-    fprintf(stderr, "[Server] FATAL: qa_init: %s\n", qa_last_error());
+    fprintf(stderr, "[CLI] ERROR: qa_init: %s\n", qa_last_error());
     return 1;
   }
   g_model_id = cfg.model_path;
