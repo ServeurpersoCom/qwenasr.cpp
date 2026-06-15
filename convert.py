@@ -9,10 +9,9 @@
 # text decoder, thinker.audio.* for the audio tower), matching the sibling
 # projects. The C++ loaders look them up under these names.
 #
-# Usage: ./convert.py --size 0.6B
-#        ./convert.py --size 1.7B
+# Converts every size in SIZES, skipping outputs that already exist.
+# Usage: ./convert.py
 
-import argparse
 import json
 import os
 import re
@@ -183,8 +182,8 @@ def convert(size):
 
     shards = resolve_shards(ckpt_dir)
     if not shards:
-        log(tag, "missing safetensors in %s, run checkpoints.sh first" % ckpt_dir)
-        sys.exit(1)
+        log(tag, "skip: checkpoint missing, run checkpoints.sh first")
+        return
     if os.path.exists(out_path):
         log(tag, "skip: %s exists" % os.path.basename(out_path))
         return
@@ -247,12 +246,13 @@ def convert(size):
     w.close()
     log(tag, "wrote %.0f MB -> %s" % (os.path.getsize(out_path) / (1 << 20), out_path))
 
+SIZES = ["0.6B", "1.7B"]
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--size", choices=["0.6B", "1.7B"], required=True)
-    args = ap.parse_args()
     os.makedirs(os.path.join(SCRIPT_DIR, "models"), exist_ok=True)
-    convert(args.size)
+    for size in SIZES:
+        convert(size)
+    log("GGUF", "done -> %s" % os.path.join(SCRIPT_DIR, "models"))
 
 if __name__ == "__main__":
     main()
