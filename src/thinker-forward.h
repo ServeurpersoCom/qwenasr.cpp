@@ -6,8 +6,9 @@
 //
 //   thinker_forward_prefill: feeds a [T, hidden] input embedding, rewinds the
 //   KV cache to 0 and writes T positions into it.
-//   thinker_forward_decode: feeds a single [1, hidden] embedding, appends one
-//   position at index kv->cur_len and attends to the [0, cur_len + 1) window.
+//   thinker_forward_decode: feeds a token id, gathers its embedding on device
+//   with get_rows, appends one position at index kv->cur_len and attends to the
+//   [0, cur_len + 1) window.
 //
 // RoPE is plain 1D NEOX (rotate_half). The Thinker rope index gives the three
 // mrope axes the same position id, so the interleaved mrope collapses exactly
@@ -163,7 +164,8 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
 // appended to the cache starting at n_past.
 static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
                                  ggml_backend_sched_t sched,
-                                 const float *input_embed, int T, int n_past,
+                                 const float *input_embed,
+                                 const int32_t *token_ids, int T, int n_past,
                                  bool use_flash_attn, bool clamp_fp16,
                                  ThinkerForwardOutput *out) {
   const int hidden = tw->hidden_size;
@@ -182,14 +184,27 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
     return false;
   }
 
-  struct ggml_tensor *x_in = ggml_new_tensor_2d(gctx, GGML_TYPE_F32, hidden, T);
+  // x_in is either an uploaded [hidden, T] embedding (prefill, audio states
+  // spliced in) or get_rows(token_embd, ids) gathered on device (decode, no
+  // host roundtrip). token_ids selects the decode path.
+  struct ggml_tensor *ids_in = NULL;
+  struct ggml_tensor *x_in;
+  if (token_ids) {
+    ids_in = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, T);
+    ggml_set_name(ids_in, "token_ids");
+    ggml_set_input(ids_in);
+    x_in = ggml_get_rows(gctx, tw->token_embd, ids_in);
+  } else {
+    x_in = ggml_new_tensor_2d(gctx, GGML_TYPE_F32, hidden, T);
+    ggml_set_name(x_in, "input_embed");
+    ggml_set_input(x_in);
+  }
+
   struct ggml_tensor *pos_in = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, T);
   struct ggml_tensor *mask_in =
       ggml_new_tensor_2d(gctx, GGML_TYPE_F16, T_full, T);
-  ggml_set_name(x_in, "input_embed");
   ggml_set_name(pos_in, "positions");
   ggml_set_name(mask_in, "causal_mask");
-  ggml_set_input(x_in);
   ggml_set_input(pos_in);
   ggml_set_input(mask_in);
 
@@ -221,8 +236,12 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
     return false;
   }
 
-  ggml_backend_tensor_set(x_in, input_embed, 0,
-                          (size_t)T * (size_t)hidden * sizeof(float));
+  if (token_ids) {
+    ggml_backend_tensor_set(ids_in, token_ids, 0, (size_t)T * sizeof(int32_t));
+  } else {
+    ggml_backend_tensor_set(x_in, input_embed, 0,
+                            (size_t)T * (size_t)hidden * sizeof(float));
+  }
 
   {
     std::vector<int32_t> pos((size_t)T);
@@ -292,15 +311,14 @@ static bool thinker_forward_prefill(const ThinkerWeights *tw, KVCache *kv,
         T, kv->max_seq_len);
     return false;
   }
-  return thinker_forward_core(tw, kv, sched, input_embed, T, 0, use_flash_attn,
-                              clamp_fp16, out);
+  return thinker_forward_core(tw, kv, sched, input_embed, NULL, T, 0,
+                              use_flash_attn, clamp_fp16, out);
 }
 
-// Decode: feed one embedding, append one position to the cache, attend to the
-// [0, cur_len + 1) window.
+// Decode: feed one token id, gather its embedding on device, append one
+// position to the cache, attend to the [0, cur_len + 1) window.
 static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
-                                   ggml_backend_sched_t sched,
-                                   const float *input_embed_1,
+                                   ggml_backend_sched_t sched, int32_t token_id,
                                    bool use_flash_attn, bool clamp_fp16,
                                    ThinkerForwardOutput *out) {
   if (kv->cur_len + 1 > kv->max_seq_len) {
@@ -310,6 +328,6 @@ static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
         kv->cur_len, kv->max_seq_len);
     return false;
   }
-  return thinker_forward_core(tw, kv, sched, input_embed_1, 1, kv->cur_len,
+  return thinker_forward_core(tw, kv, sched, NULL, &token_id, 1, kv->cur_len,
                               use_flash_attn, clamp_fp16, out);
 }

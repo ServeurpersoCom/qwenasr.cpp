@@ -296,7 +296,6 @@ struct AsrPerf {
   double tower_ms;    // windowed audio tower
   double build_ms;    // prompt build, token embed, audio splice
   double prefill_ms;  // thinker prefill over the prompt span
-  double embed_ms;    // per token get_rows roundtrip, summed
   double decode_ms;   // thinker decode step, summed
   double total_ms;    // entry to return
   int n_tokens;       // generated tokens
@@ -317,8 +316,6 @@ static void asr_log_perf(const AsrPerf &p) {
   qa_log(QA_LOG_INFO, "[Perf] Build %.1f ms (embed + audio splice)",
          p.build_ms);
   qa_log(QA_LOG_INFO, "[Perf] Prefill %.1f ms", p.prefill_ms);
-  qa_log(QA_LOG_INFO, "[Perf] Embed %.1f ms (per token get_rows roundtrip)",
-         p.embed_ms);
   qa_log(QA_LOG_INFO,
          "[Perf] Decode %.1f ms (%d tokens, %.2f ms/tok, %.1f tok/s)",
          p.decode_ms, p.n_tokens, ms_tok, tok_s);
@@ -444,13 +441,8 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
       }
     }
 
-    std::vector<int> one = {next};
-    Timer t_emb;
-    std::vector<float> e1 = embed_tokens(p, one);
-    perf.embed_ms += t_emb.ms();
-
     Timer t_dec;
-    if (!thinker_forward_decode(&p->tw, &kv, p->sched, e1.data(), p->flash_attn,
+    if (!thinker_forward_decode(&p->tw, &kv, p->sched, next, p->flash_attn,
                                 p->clamp_fp16, &out)) {
       kv_cache_free(&kv);
       qa_set_error("pipeline_asr_run: decode failed");
