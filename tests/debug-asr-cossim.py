@@ -71,8 +71,8 @@ def metric(a, b):
     a, b = a[:n], b[:n]
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     cos = float(np.dot(a, b) / denom) if denom > 1e-10 else 0.0
-    d = np.abs(a - b)
-    return cos, float(d.max()) if n else 0.0, float(d.mean()) if n else 0.0, n
+    mx = float(np.abs(a - b).max()) if n else 0.0
+    return cos, mx, n
 
 
 def install_hooks(hf, dump_pt):
@@ -92,6 +92,16 @@ def install_hooks(hf, dump_pt):
     def pre_layer0(mod, args, kwargs):
         save_dump(os.path.join(dump_pt, "stem.bin"), args[0])
 
+    def inject_window_mask(mod, args, kwargs):
+        # The eager and sdpa paths ignore cu_seqlens, that ragged windowing is
+        # only honored by FA2. Without a mask the encoder attends fully across
+        # windows. Inject the block diagonal mask the model already knows how to
+        # build, so the reference applies the same windowing the C++ tower does.
+        cu = args[1] if len(args) > 1 else kwargs.get("cu_seqlens")
+        kwargs = dict(kwargs)
+        kwargs["attention_mask"] = tower._prepare_attention_mask(args[0], cu)
+        return args, kwargs
+
     def post_tower(mod, args, kwargs, output):
         save_dump(os.path.join(dump_pt, "windowed.bin"), output.last_hidden_state)
 
@@ -103,6 +113,8 @@ def install_hooks(hf, dump_pt):
 
     tower.register_forward_pre_hook(pre_tower, with_kwargs=True)
     tower.layers[0].register_forward_pre_hook(pre_layer0, with_kwargs=True)
+    for layer in tower.layers:
+        layer.register_forward_pre_hook(inject_window_mask, with_kwargs=True)
     tower.register_forward_hook(post_tower, with_kwargs=True)
     thinker.model.norm.register_forward_hook(post_norm)
 
@@ -152,7 +164,7 @@ def main():
             continue
         cpp_v = load_flat(cpp_path)
         pt_v = load_flat(pt_path)
-        cos, mx, mn, n = metric(cpp_v, pt_v)
+        cos, mx, n = metric(cpp_v, pt_v)
         tag = "" if cpp_v.size == pt_v.size else f" (cpp {cpp_v.size} pt {pt_v.size})"
         print(f"[Cossim] {label} cos {cos:.8f} max_abs {mx:.3e} n {n}{tag}")
         ok = ok and cos > 0.99
