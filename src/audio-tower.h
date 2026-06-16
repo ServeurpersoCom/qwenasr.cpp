@@ -89,12 +89,14 @@ static std::vector<float> audio_tower_build_mask(int seq_len,
 // Build the windowed tower graph. mel_in [n_frames, n_mels, 1, 1], pe_chunk_in
 // [d_model, chunk_aftercnn] is the positional table sliced per chunk, mask_in
 // [S, S] is the block-diagonal mask. chunk_lengths is the host chunk plan.
-// Returns the projected states [output_dim, S].
+// Returns the projected states [output_dim, S]. stem_out, when not null,
+// captures the pre encoder stem sequence [d_model, S_stem] for a debug dump.
 static struct ggml_tensor *
 audio_tower_build(struct ggml_context *ctx, const ConvStem &stem,
                   const AudioEnc &enc, struct ggml_tensor *mel_in,
                   struct ggml_tensor *pe_chunk_in, struct ggml_tensor *mask_in,
-                  const std::vector<int> &chunk_lengths) {
+                  const std::vector<int> &chunk_lengths,
+                  struct ggml_tensor **stem_out = nullptr) {
   const int64_t n_mels = mel_in->ne[1];
   const int d_model = enc.cfg.d_model;
 
@@ -114,5 +116,8 @@ audio_tower_build(struct ggml_context *ctx, const ConvStem &stem,
     off += len;
   }
 
+  if (stem_out) {
+    *stem_out = seq;
+  }
   return audio_enc_build(ctx, enc, seq, mask_in);
 }

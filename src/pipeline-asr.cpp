@@ -44,6 +44,7 @@ struct pipeline_asr {
   AudioTowerConfig tower_cfg;
   bool flash_attn;
   bool clamp_fp16;
+  std::string dump_dir;
 };
 
 // Reflect pad on the host, Whisper center=True with pad = n_fft / 2. PyTorch
@@ -62,6 +63,20 @@ static std::vector<float> reflect_pad(const std::vector<float> &x, int pad) {
     out[(size_t)(pad + T + i)] = x[(size_t)(T - 2 - i)];
   }
   return out;
+}
+
+// Write a host f32 buffer as a raw little endian dump for the cossim harness.
+static void dump_f32(const std::string &dir, const char *name,
+                     const std::vector<float> &v) {
+  const std::string path = dir + "/" + name;
+  FILE *f = fopen(path.c_str(), "wb");
+  if (!f) {
+    qa_log(QA_LOG_WARN, "[Dump] cannot open %s", path.c_str());
+    return;
+  }
+  fwrite(v.data(), sizeof(float), v.size(), f);
+  fclose(f);
+  qa_log(QA_LOG_INFO, "[Dump] %s [%zu floats]", path.c_str(), v.size());
 }
 
 // Mel graph on the shared backend. Returns the normalized mel [n_mels,
@@ -136,6 +151,9 @@ static std::vector<float> run_mel(pipeline_asr *p,
   *n_frames_out =
       audio_mel_normalize(log10_mel, cfg.n_mels, n_frames_full, out);
   ggml_free(gctx);
+  if (!p->dump_dir.empty()) {
+    dump_f32(p->dump_dir, "mel.bin", out);
+  }
   return out;
 }
 
@@ -177,9 +195,14 @@ static std::vector<float> run_tower(pipeline_asr *p, int n_mels,
   ggml_set_input(pe_in);
   ggml_set_input(mask_in);
 
-  struct ggml_tensor *out = audio_tower_build(gctx, p->stem, p->enc, mel_in,
-                                              pe_in, mask_in, chunk_lengths);
+  const bool dump = !p->dump_dir.empty();
+  struct ggml_tensor *stem_t = nullptr;
+  struct ggml_tensor *out = audio_tower_build(
+      gctx, p->stem, p->enc, mel_in, pe_in, mask_in, chunk_lengths, &stem_t);
   ggml_set_output(out);
+  if (dump) {
+    ggml_set_output(stem_t);
+  }
 
   struct ggml_cgraph *graph =
       ggml_new_graph_custom(gctx, GGML_DEFAULT_GRAPH_SIZE, false);
@@ -201,6 +224,13 @@ static std::vector<float> run_tower(pipeline_asr *p, int n_mels,
   const int64_t t_out = out->ne[1];
   std::vector<float> states((size_t)out_dim * (size_t)t_out);
   ggml_backend_tensor_get(out, states.data(), 0, states.size() * sizeof(float));
+  if (dump) {
+    std::vector<float> stem_host((size_t)stem_t->ne[0] * (size_t)stem_t->ne[1]);
+    ggml_backend_tensor_get(stem_t, stem_host.data(), 0,
+                            stem_host.size() * sizeof(float));
+    dump_f32(p->dump_dir, "stem.bin", stem_host);
+    dump_f32(p->dump_dir, "windowed.bin", states);
+  }
   ggml_free(gctx);
   *n_states_out = (int)t_out;
   return states;
@@ -246,6 +276,7 @@ pipeline_asr *pipeline_asr_load(const pipeline_asr_params &params) {
   pipeline_asr *p = new pipeline_asr();
   p->flash_attn = params.flash_attn;
   p->clamp_fp16 = params.clamp_fp16;
+  p->dump_dir = params.dump_dir;
 
   p->backend = backend_init("Pipeline");
   if (!p->backend.backend) {
@@ -344,6 +375,10 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
   }
   perf.resample_ms = t_re.ms();
 
+  if (!p->dump_dir.empty()) {
+    dump_f32(p->dump_dir, "pcm16.bin", samples);
+  }
+
   Timer t_mel;
   size_t n_frames = 0;
   std::vector<float> mel = run_mel(p, samples, &n_frames);
@@ -387,6 +422,11 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     return QA_STATUS_GENERATE_FAILED;
   }
   perf.prefill_ms = t_pf.ms();
+
+  if (!p->dump_dir.empty()) {
+    dump_f32(p->dump_dir, "hidden.bin", out.hidden_all);
+    dump_f32(p->dump_dir, "logits.bin", out.logits_last);
+  }
 
   // Resolve sampling. seed -1 draws a hardware seed, temperature <= 0 stays
   // greedy argmax. Each token advances the philox subsequence so a fixed seed

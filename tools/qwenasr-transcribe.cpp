@@ -1,9 +1,11 @@
-// qwenasr-transcribe: wav -> text over the public ABI. Reads a file as mono
-// PCM, resampled to 16 kHz, runs one transcription, writes the transcript to
-// stdout or to -o. Backend selection follows the GGML_BACKEND env var, CPU
-// otherwise.
+// qwenasr-transcribe: wav -> text. Reads a file as mono PCM, resampled to
+// 16 kHz, runs one transcription, writes the transcript to stdout or to -o.
+// Normal runs go through the public ABI in qwenasr.h. With --dump it drives the
+// pipeline directly to write the stage tensors. Backend selection follows the
+// GGML_BACKEND env var, CPU otherwise.
 
 #include "audio-io.h"
+#include "pipeline-asr.h"
 #include "qwenasr.h"
 #include "utf8.h"
 #include "version.h"
@@ -12,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 static void print_usage(const char *prog) {
   fprintf(stderr, "qwenasr.cpp %s\n\n", QWENASR_VERSION);
@@ -107,8 +110,6 @@ static int main_impl(int argc, char **argv) {
       return 2;
     }
   }
-  (void)dump_dir; // staged dump wires in alongside qwenasr-feat
-
   if (!model_path || !file_path) {
     print_usage(argv[0]);
     return 2;
@@ -118,18 +119,6 @@ static int main_impl(int argc, char **argv) {
   float *pcm = audio_read_mono(file_path, 16000, &n_samples);
   if (!pcm) {
     fprintf(stderr, "[CLI] ERROR: failed to read audio: %s\n", file_path);
-    return 1;
-  }
-
-  struct qa_init_params ip = qa_init_default_params();
-  ip.model_path = model_path;
-  ip.clamp_fp16 = clamp_fp16;
-  ip.flash_attn = flash_attn;
-
-  qa_context *ctx = qa_init(&ip);
-  if (!ctx) {
-    fprintf(stderr, "[CLI] ERROR: qa_init: %s\n", qa_last_error());
-    free(pcm);
     return 1;
   }
 
@@ -145,32 +134,59 @@ static int main_impl(int argc, char **argv) {
     tp.max_new_tokens = max_tokens;
   }
 
-  char *text = nullptr;
-  const qa_status rc =
-      qa_transcribe(ctx, pcm, (size_t)n_samples, 16000, &tp, &text);
-  int ret = 0;
-  if (rc == QA_STATUS_OK) {
-    if (out_path) {
-      FILE *f = fopen(out_path, "wb");
-      if (f) {
-        fputs(text, f);
-        fputc('\n', f);
-        fclose(f);
-      } else {
-        fprintf(stderr, "[CLI] ERROR: cannot open %s\n", out_path);
-        ret = 1;
-      }
-    } else {
-      printf("%s\n", text);
-    }
-    qa_free_text(text);
+  // Normal runs go through the public ABI. --dump drives the pipeline directly
+  // so the stage tensors land on disk for the cossim harness.
+  std::string text;
+  qa_status rc;
+  if (dump_dir) {
+    pipeline_asr_params pp;
+    pp.model_path = model_path;
+    pp.clamp_fp16 = clamp_fp16;
+    pp.flash_attn = flash_attn;
+    pp.dump_dir = dump_dir;
+    pipeline_asr *pipe = pipeline_asr_load(pp);
+    rc = pipeline_asr_run(pipe, pcm, (size_t)n_samples, 16000, &tp, text);
+    pipeline_asr_free(pipe);
   } else {
-    fprintf(stderr, "[CLI] ERROR: qa_transcribe: %s\n", qa_last_error());
-    ret = 1;
+    struct qa_init_params ip = qa_init_default_params();
+    ip.model_path = model_path;
+    ip.clamp_fp16 = clamp_fp16;
+    ip.flash_attn = flash_attn;
+    qa_context *ctx = qa_init(&ip);
+    if (!ctx) {
+      fprintf(stderr, "[CLI] ERROR: qa_init: %s\n", qa_last_error());
+      free(pcm);
+      return 1;
+    }
+    char *out_text = nullptr;
+    rc = qa_transcribe(ctx, pcm, (size_t)n_samples, 16000, &tp, &out_text);
+    if (rc == QA_STATUS_OK) {
+      text = out_text;
+      qa_free_text(out_text);
+    }
+    qa_free(ctx);
+  }
+  free(pcm);
+
+  if (rc != QA_STATUS_OK) {
+    fprintf(stderr, "[CLI] ERROR: transcribe: %s\n", qa_last_error());
+    return 1;
   }
 
-  qa_free(ctx);
-  free(pcm);
+  int ret = 0;
+  if (out_path) {
+    FILE *f = fopen(out_path, "wb");
+    if (f) {
+      fputs(text.c_str(), f);
+      fputc('\n', f);
+      fclose(f);
+    } else {
+      fprintf(stderr, "[CLI] ERROR: cannot open %s\n", out_path);
+      ret = 1;
+    }
+  } else {
+    printf("%s\n", text.c_str());
+  }
   return ret;
 }
 
