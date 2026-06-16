@@ -446,12 +446,12 @@ required) plus optional `model`, `language`, `prompt` and `response_format`.
 cpp-httplib with no SSL, meant to sit behind a reverse proxy, and parses and
 emits JSON through yyjson.
 
-### qwenasr-feat and qwenasr-thinker
+### Stage dumps
 
-Staged debug binaries for the cossim harness. `qwenasr-feat` dumps the mel, the
-conv stem, the encoder and the windowed tower outputs ; `qwenasr-thinker` dumps
-the decoder prefill hidden states and logits. Both link the core library and
-read the same GGUF, so dims come from metadata exactly like the full pipeline.
+`qwenasr-transcribe --dump <dir>` writes the mel, conv stem, windowed tower,
+prefill hidden and logits as raw f32 in one end to end run, plus the resampled
+16k pcm. The cossim harness feeds that pcm to the transformers reference and
+compares each stage against the real model through forward hooks.
 
 ## Module map
 
@@ -466,7 +466,6 @@ src/
   audio-mel.h               Log-mel frontend, im2col DFT, Slaney filterbank
   philox.h                  Philox4x32-10 counter-based PRNG
   sampling.h                Thinker sampling chain (rep_pen / temp / top_k / top_p)
-  debug.h                   Tensor dumper for cossim tests
   utf8.h                    UTF-8 helpers for streaming detokenize
   bpe.h                     GPT2 byte-level BPE, GGUF loader
   lang-map.h                Forced language normalisation, 30 supported names
@@ -483,10 +482,8 @@ src/
   timer.h                   Wall clock spans for the perf log
 
 tools/
-  qwenasr-transcribe.cpp    CLI : audio -> text
+  qwenasr-transcribe.cpp    CLI : audio -> text, --dump for stage tensors
   asr-server.cpp            OpenAI /v1/audio/transcriptions server
-  qwenasr-feat.cpp          Staged dumps : mel, stem, encoder, tower
-  qwenasr-thinker.cpp       Staged dumps : decoder hidden + logits
   quantize.cpp              GGUF requantizer with the per tensor policy
   version.cmake             Embeds the git short hash into the binary
 

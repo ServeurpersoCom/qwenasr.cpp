@@ -134,17 +134,8 @@ endif()
 add_executable(quantize tools/quantize.cpp)
 link_ggml_backends(quantize)
 
-# qwenasr-feat: staged debug dumps for the cossim harness.
-add_executable(qwenasr-feat tools/qwenasr-feat.cpp)
-target_link_libraries(qwenasr-feat PRIVATE qwenasr-core)
-link_ggml_backends(qwenasr-feat)
-
-# qwenasr-thinker: staged debug for the thinker decoder cossim.
-add_executable(qwenasr-thinker tools/qwenasr-thinker.cpp)
-target_link_libraries(qwenasr-thinker PRIVATE qwenasr-core)
-link_ggml_backends(qwenasr-thinker)
-
-# qwenasr-transcribe: full wav -> text pipeline. Grows phase by phase.
+# qwenasr-transcribe: full wav -> text pipeline, --dump writes the stage tensors
+# for the cossim harness.
 add_executable(qwenasr-transcribe tools/qwenasr-transcribe.cpp)
 target_link_libraries(qwenasr-transcribe PRIVATE qwenasr-core)
 link_ggml_backends(qwenasr-transcribe)
