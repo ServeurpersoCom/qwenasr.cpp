@@ -35,6 +35,13 @@ static const int kModelSampleRate = 16000;
 struct pipeline_asr {
   BackendPair backend;
   ggml_backend_sched_t sched;
+
+  // Persistent graph arenas, one per thinker graph shape class (prefill
+  // uploads the spliced embedding, decode gathers one token with get_rows):
+  // stable node addresses keep the backend CUDA graph cache hot.
+  GraphArena thinker_prefill_arena;
+  GraphArena thinker_decode_arena;
+
   ConvStem stem;
   AudioEnc enc;
   ThinkerWeights tw;
@@ -299,6 +306,12 @@ pipeline_asr *pipeline_asr_load(const pipeline_asr_params &params) {
   if (!thinker_weights_load(&p->tw, gf, p->backend.backend)) {
     qa_throw("pipeline_asr_load: thinker load failed");
   }
+  if (!graph_arena_init(&p->thinker_prefill_arena,
+                        thinker_graph_max_nodes(p->tw.num_hidden_layers)) ||
+      !graph_arena_init(&p->thinker_decode_arena,
+                        thinker_graph_max_nodes(p->tw.num_hidden_layers))) {
+    qa_throw("pipeline_asr_load: graph arena init failed");
+  }
   if (!load_bpe_from_gguf(&p->tok, params.model_path.c_str())) {
     qa_throw("pipeline_asr_load: tokenizer load failed");
   }
@@ -312,6 +325,8 @@ void pipeline_asr_free(pipeline_asr *p) {
   if (!p) {
     return;
   }
+  graph_arena_free(&p->thinker_decode_arena);
+  graph_arena_free(&p->thinker_prefill_arena);
   thinker_weights_free(&p->tw);
   audio_enc_free(&p->enc);
   conv_stem_free(&p->stem);
@@ -415,8 +430,9 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
 
   Timer t_pf;
   ThinkerForwardOutput out;
-  if (!thinker_forward_prefill(&p->tw, &kv, p->sched, embed.data(), T,
-                               p->flash_attn, p->clamp_fp16, &out)) {
+  if (!thinker_forward_prefill(&p->tw, &kv, p->sched, &p->thinker_prefill_arena,
+                               embed.data(), T, p->flash_attn, p->clamp_fp16,
+                               &out)) {
     kv_cache_free(&kv);
     qa_set_error("pipeline_asr_run: prefill failed");
     return QA_STATUS_GENERATE_FAILED;
@@ -472,8 +488,8 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
     }
 
     Timer t_dec;
-    if (!thinker_forward_decode(&p->tw, &kv, p->sched, next, p->flash_attn,
-                                p->clamp_fp16, &out)) {
+    if (!thinker_forward_decode(&p->tw, &kv, p->sched, &p->thinker_decode_arena,
+                                next, p->flash_attn, p->clamp_fp16, &out)) {
       kv_cache_free(&kv);
       qa_set_error("pipeline_asr_run: decode failed");
       return QA_STATUS_GENERATE_FAILED;

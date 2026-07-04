@@ -18,6 +18,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "graph-arena.h"
 #include "kv-cache.h"
 #include "thinker-weights.h"
 
@@ -25,6 +26,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+
+// Node budget for one thinker graph, sizes both the persistent arenas in the
+// pipeline and the graph allocated per forward.
+static int thinker_graph_max_nodes(int n_layers) { return 48 * n_layers + 256; }
 
 struct ThinkerForwardOutput {
   // Final hidden state for every position [T, hidden] f32 (post final norm).
@@ -63,8 +68,8 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
                       const ThinkerLayer &layer, struct ggml_tensor *x,
                       struct ggml_tensor *positions, struct ggml_tensor *mask,
                       struct ggml_tensor *k_cache, struct ggml_tensor *v_cache,
-                      int n_past, int T, bool use_flash_attn, bool clamp_fp16,
-                      struct ggml_cgraph *gf) {
+                      int n_past, int T, int n_kv_pad, bool use_flash_attn,
+                      bool clamp_fp16, struct ggml_cgraph *gf) {
   const int n_q_heads = tw->num_attention_heads;
   const int n_kv = tw->num_key_value_heads;
   const int hd = tw->head_dim;
@@ -111,11 +116,13 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
   ggml_build_forward_expand(gf, ggml_cpy(ctx, k_perm, k_dst));
   ggml_build_forward_expand(gf, ggml_cpy(ctx, v_perm, v_dst));
 
-  // Read the [0, n_past + T) window for attention.
-  const int T_full = n_past + T;
-  struct ggml_tensor *k_full = ggml_view_3d(ctx, k_cache, hd, T_full, n_kv,
+  // Read the padded [0, n_kv_pad) window for attention. The width stays
+  // constant across consecutive decode steps so the CUDA graph executable
+  // updates in place; the mask carries neg inf past n_past + T and the cache
+  // buffer is zero initialized, so the padded tail contributes nothing.
+  struct ggml_tensor *k_full = ggml_view_3d(ctx, k_cache, hd, n_kv_pad, n_kv,
                                             k_cache->nb[1], k_cache->nb[2], 0);
-  struct ggml_tensor *v_full = ggml_view_3d(ctx, v_cache, hd, T_full, n_kv,
+  struct ggml_tensor *v_full = ggml_view_3d(ctx, v_cache, hd, n_kv_pad, n_kv,
                                             v_cache->nb[1], v_cache->nb[2], 0);
 
   struct ggml_tensor *q_p =
@@ -161,9 +168,10 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
 
 // Shared core: build the graph, allocate, upload inputs, run, pull the full
 // final hidden [T, hidden] and the last position logits [vocab]. T tokens are
-// appended to the cache starting at n_past.
+// appended to the cache starting at n_past. The graph metadata lives in the
+// caller owned persistent arena.
 static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
-                                 ggml_backend_sched_t sched,
+                                 ggml_backend_sched_t sched, GraphArena *arena,
                                  const float *input_embed,
                                  const int32_t *token_ids, int T, int n_past,
                                  bool use_flash_attn, bool clamp_fp16,
@@ -173,16 +181,16 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
   const int vocab = tw->vocab_size;
   const int T_full = n_past + T;
 
-  const int max_nodes = 48 * n_layers + 256;
-  const size_t graph_arena_bytes = ggml_tensor_overhead() * max_nodes +
-                                   ggml_graph_overhead_custom(max_nodes, false);
+  // Attention window rounded up to 256 and clamped to the cache size: fixed
+  // shapes over spans of 256 decode steps keep the CUDA graph executable
+  // updatable in place. Ternary instead of std::min: windows.h min/max macros
+  // break the latter in headers on MSVC.
+  const int kv_pad_raw = (int)GGML_PAD(T_full, 256);
+  const int n_kv_pad =
+      kv_pad_raw < kv->max_seq_len ? kv_pad_raw : kv->max_seq_len;
 
-  struct ggml_init_params gparams = {graph_arena_bytes, NULL, true};
-  struct ggml_context *gctx = ggml_init(gparams);
-  if (!gctx) {
-    fprintf(stderr, "[ThinkerForward] FATAL: ggml_init failed\n");
-    return false;
-  }
+  const int max_nodes = thinker_graph_max_nodes(n_layers);
+  struct ggml_context *gctx = graph_arena_begin(arena);
 
   // x_in is either an uploaded [hidden, T] embedding (prefill, audio states
   // spliced in) or get_rows(token_embd, ids) gathered on device (decode, no
@@ -202,7 +210,7 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
 
   struct ggml_tensor *pos_in = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, T);
   struct ggml_tensor *mask_in =
-      ggml_new_tensor_2d(gctx, GGML_TYPE_F16, T_full, T);
+      ggml_new_tensor_2d(gctx, GGML_TYPE_F16, n_kv_pad, T);
   ggml_set_name(pos_in, "positions");
   ggml_set_name(mask_in, "causal_mask");
   ggml_set_input(pos_in);
@@ -212,9 +220,9 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
 
   struct ggml_tensor *h = x_in;
   for (int l = 0; l < n_layers; l++) {
-    h = thinker_layer_forward(gctx, tw, tw->layers[(size_t)l], h, pos_in,
-                              mask_in, kv->k[(size_t)l], kv->v[(size_t)l],
-                              n_past, T, use_flash_attn, clamp_fp16, gf);
+    h = thinker_layer_forward(
+        gctx, tw, tw->layers[(size_t)l], h, pos_in, mask_in, kv->k[(size_t)l],
+        kv->v[(size_t)l], n_past, T, n_kv_pad, use_flash_attn, clamp_fp16, gf);
   }
 
   struct ggml_tensor *h_final = ggml_rms_norm(gctx, h, tw->rms_norm_eps);
@@ -232,7 +240,6 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
   if (!ggml_backend_sched_alloc_graph(sched, gf)) {
     fprintf(stderr, "[ThinkerForward] FATAL: graph allocation failed\n");
     ggml_backend_sched_reset(sched);
-    ggml_free(gctx);
     return false;
   }
 
@@ -251,9 +258,10 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
     ggml_backend_tensor_set(pos_in, pos.data(), 0, (size_t)T * sizeof(int32_t));
   }
 
-  // Causal mask [T_q, T_k], 0 where k <= n_past + q, -inf otherwise.
+  // Causal mask [T_q, n_kv_pad], 0 where k <= n_past + q, neg inf otherwise,
+  // padded tail included.
   {
-    std::vector<ggml_fp16_t> mask((size_t)T * (size_t)T_full);
+    std::vector<ggml_fp16_t> mask((size_t)T * (size_t)n_kv_pad);
     const ggml_fp16_t zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t neg_inf = ggml_fp32_to_fp16(-INFINITY);
     for (size_t i = 0; i < mask.size(); i++) {
@@ -262,7 +270,7 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
     for (int q = 0; q < T; q++) {
       const int q_pos = n_past + q;
       for (int kk = 0; kk <= q_pos; kk++) {
-        mask[(size_t)q * (size_t)T_full + (size_t)kk] = zero;
+        mask[(size_t)q * (size_t)n_kv_pad + (size_t)kk] = zero;
       }
     }
     ggml_backend_tensor_set(mask_in, mask.data(), 0,
@@ -272,7 +280,6 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
   if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
     fprintf(stderr, "[ThinkerForward] FATAL: graph compute failed\n");
     ggml_backend_sched_reset(sched);
-    ggml_free(gctx);
     return false;
   }
 
@@ -289,10 +296,9 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
                             (size_t)(T - 1) * row_bytes, row_bytes);
   }
 
+  // Advance the cache write head. The arena and the sched allocation persist
+  // into the next forward.
   kv->cur_len = T_full;
-
-  ggml_backend_sched_reset(sched);
-  ggml_free(gctx);
   return true;
 }
 
@@ -300,8 +306,8 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
 // [T, hidden] f32 row-major.
 static bool thinker_forward_prefill(const ThinkerWeights *tw, KVCache *kv,
                                     ggml_backend_sched_t sched,
-                                    const float *input_embed, int T,
-                                    bool use_flash_attn, bool clamp_fp16,
+                                    GraphArena *arena, const float *input_embed,
+                                    int T, bool use_flash_attn, bool clamp_fp16,
                                     ThinkerForwardOutput *out) {
   kv_cache_reset(kv);
   if (T > kv->max_seq_len) {
@@ -311,14 +317,15 @@ static bool thinker_forward_prefill(const ThinkerWeights *tw, KVCache *kv,
         T, kv->max_seq_len);
     return false;
   }
-  return thinker_forward_core(tw, kv, sched, input_embed, NULL, T, 0,
+  return thinker_forward_core(tw, kv, sched, arena, input_embed, NULL, T, 0,
                               use_flash_attn, clamp_fp16, out);
 }
 
 // Decode: feed one token id, gather its embedding on device, append one
 // position to the cache, attend to the [0, cur_len + 1) window.
 static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
-                                   ggml_backend_sched_t sched, int32_t token_id,
+                                   ggml_backend_sched_t sched,
+                                   GraphArena *arena, int32_t token_id,
                                    bool use_flash_attn, bool clamp_fp16,
                                    ThinkerForwardOutput *out) {
   if (kv->cur_len + 1 > kv->max_seq_len) {
@@ -328,6 +335,6 @@ static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
         kv->cur_len, kv->max_seq_len);
     return false;
   }
-  return thinker_forward_core(tw, kv, sched, NULL, &token_id, 1, kv->cur_len,
-                              use_flash_attn, clamp_fp16, out);
+  return thinker_forward_core(tw, kv, sched, arena, NULL, &token_id, 1,
+                              kv->cur_len, use_flash_attn, clamp_fp16, out);
 }
