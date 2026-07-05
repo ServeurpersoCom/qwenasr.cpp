@@ -33,6 +33,8 @@ static int thinker_graph_max_nodes(int n_layers) { return 48 * n_layers + 256; }
 
 struct ThinkerForwardOutput {
   // Final hidden state for every position [T, hidden] f32 (post final norm).
+  // Filled only when read_hidden_host is set (dump path); the decode hot loop
+  // reads back the logits alone.
   std::vector<float> hidden_all;
 
   // Output logits for the last position [vocab] f32.
@@ -58,8 +60,10 @@ thinker_attn_f32(struct ggml_context *ctx, struct ggml_tensor *q,
 }
 
 // Per-layer block, KV cached. K and V for the T fresh positions get computed,
-// written into the cache at [n_past, n_past + T) on dim 1, and the attention
-// reads the contiguous [0, n_past + T) slice. Returns the layer output
+// then written into the cache at the rows carried by kv_rows via set_rows: the
+// destination positions travel as data, so the graph topology stays identical
+// across decode steps and the captured CUDA graph replays without an update.
+// The attention reads the padded [0, n_kv_pad) slice. Returns the layer output
 // [hidden, T]. use_flash_attn picks the fused kernel (F16 accumulation guarded
 // with set_prec F32) or the manual F32 chain. clamp_fp16 inserts
 // ggml_clamp(-65504, 65504) on V before attention and on the residual stream.
@@ -67,9 +71,10 @@ static struct ggml_tensor *
 thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
                       const ThinkerLayer &layer, struct ggml_tensor *x,
                       struct ggml_tensor *positions, struct ggml_tensor *mask,
-                      struct ggml_tensor *k_cache, struct ggml_tensor *v_cache,
-                      int n_past, int T, int n_kv_pad, bool use_flash_attn,
-                      bool clamp_fp16, struct ggml_cgraph *gf) {
+                      struct ggml_tensor *kv_rows, struct ggml_tensor *k_cache,
+                      struct ggml_tensor *v_cache, int T, int n_kv_pad,
+                      bool use_flash_attn, bool clamp_fp16,
+                      struct ggml_cgraph *gf) {
   const int n_q_heads = tw->num_attention_heads;
   const int n_kv = tw->num_key_value_heads;
   const int hd = tw->head_dim;
@@ -100,25 +105,19 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
   k = ggml_rope_ext(ctx, k, positions, NULL, hd, GGML_ROPE_TYPE_NEOX, 0,
                     tw->rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-  // Write the T fresh K/V into the cache at dim 1 offset n_past.
+  // Write the T fresh K/V into the cache via set_rows. K and V are
+  // [hd, n_kv, T] at this point and the cache lives as [hd, max_T, n_kv] so we
+  // permute to [hd, T, n_kv]; the row ids broadcast across the n_kv head dim.
   struct ggml_tensor *k_perm =
       ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)); // [hd, T, n_kv]
   struct ggml_tensor *v_perm = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
 
-  size_t k_off = (size_t)n_past * k_cache->nb[1];
-  size_t v_off = (size_t)n_past * v_cache->nb[1];
-
-  struct ggml_tensor *k_dst = ggml_view_3d(
-      ctx, k_cache, hd, T, n_kv, k_cache->nb[1], k_cache->nb[2], k_off);
-  struct ggml_tensor *v_dst = ggml_view_3d(
-      ctx, v_cache, hd, T, n_kv, v_cache->nb[1], v_cache->nb[2], v_off);
-
-  ggml_build_forward_expand(gf, ggml_cpy(ctx, k_perm, k_dst));
-  ggml_build_forward_expand(gf, ggml_cpy(ctx, v_perm, v_dst));
+  ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_cache, k_perm, kv_rows));
+  ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_cache, v_perm, kv_rows));
 
   // Read the padded [0, n_kv_pad) window for attention. The width stays
   // constant across consecutive decode steps so the CUDA graph executable
-  // updates in place; the mask carries neg inf past n_past + T and the cache
+  // replays; the mask carries neg inf past the causal context and the cache
   // buffer is zero initialized, so the padded tail contributes nothing.
   struct ggml_tensor *k_full = ggml_view_3d(ctx, k_cache, hd, n_kv_pad, n_kv,
                                             k_cache->nb[1], k_cache->nb[2], 0);
@@ -166,15 +165,17 @@ thinker_layer_forward(struct ggml_context *ctx, const ThinkerWeights *tw,
   return x;
 }
 
-// Shared core: build the graph, allocate, upload inputs, run, pull the full
-// final hidden [T, hidden] and the last position logits [vocab]. T tokens are
-// appended to the cache starting at n_past. The graph metadata lives in the
-// caller owned persistent arena.
+// Shared core: build the graph, allocate, upload inputs, run, pull the last
+// position logits [vocab]. The full final hidden [T, hidden] comes back to
+// host only under read_hidden_host (dump path). T tokens are appended to the
+// cache starting at n_past. The graph metadata lives in the caller owned
+// persistent arena.
 static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
                                  ggml_backend_sched_t sched, GraphArena *arena,
                                  const float *input_embed,
                                  const int32_t *token_ids, int T, int n_past,
                                  bool use_flash_attn, bool clamp_fp16,
+                                 bool read_hidden_host,
                                  ThinkerForwardOutput *out) {
   const int hidden = tw->hidden_size;
   const int n_layers = tw->num_hidden_layers;
@@ -216,24 +217,32 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
   ggml_set_input(pos_in);
   ggml_set_input(mask_in);
 
+  // KV write positions as data: identical topology at every step, pure CUDA
+  // graph replay across the decode loop.
+  struct ggml_tensor *rows_in = ggml_new_tensor_1d(gctx, GGML_TYPE_I64, T);
+  ggml_set_name(rows_in, "kv_rows");
+  ggml_set_input(rows_in);
+
   struct ggml_cgraph *gf = ggml_new_graph_custom(gctx, max_nodes, false);
 
   struct ggml_tensor *h = x_in;
   for (int l = 0; l < n_layers; l++) {
-    h = thinker_layer_forward(
-        gctx, tw, tw->layers[(size_t)l], h, pos_in, mask_in, kv->k[(size_t)l],
-        kv->v[(size_t)l], n_past, T, n_kv_pad, use_flash_attn, clamp_fp16, gf);
+    h = thinker_layer_forward(gctx, tw, tw->layers[(size_t)l], h, pos_in,
+                              mask_in, rows_in, kv->k[(size_t)l],
+                              kv->v[(size_t)l], T, n_kv_pad, use_flash_attn,
+                              clamp_fp16, gf);
   }
 
   struct ggml_tensor *h_final = ggml_rms_norm(gctx, h, tw->rms_norm_eps);
   h_final = ggml_mul(gctx, h_final, tw->output_norm_w);
-  ggml_set_output(h_final);
+  if (read_hidden_host) {
+    ggml_set_output(h_final);
+  }
 
   struct ggml_tensor *logits =
       ggml_mul_mat(gctx, tw->output_w, h_final); // [vocab, T]
   ggml_set_output(logits);
 
-  ggml_build_forward_expand(gf, h_final);
   ggml_build_forward_expand(gf, logits);
 
   ggml_backend_sched_reset(sched);
@@ -256,6 +265,13 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
       pos[(size_t)i] = n_past + i;
     }
     ggml_backend_tensor_set(pos_in, pos.data(), 0, (size_t)T * sizeof(int32_t));
+
+    std::vector<int64_t> rows((size_t)T);
+    for (int i = 0; i < T; i++) {
+      rows[(size_t)i] = (int64_t)(n_past + i);
+    }
+    ggml_backend_tensor_set(rows_in, rows.data(), 0,
+                            (size_t)T * sizeof(int64_t));
   }
 
   // Causal mask [T_q, n_kv_pad], 0 where k <= n_past + q, neg inf otherwise,
@@ -286,14 +302,16 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
   out->hidden = hidden;
   out->vocab = vocab;
   out->n_tokens = T;
-  out->hidden_all.assign((size_t)T * (size_t)hidden, 0.0f);
   out->logits_last.assign((size_t)vocab, 0.0f);
-  ggml_backend_tensor_get(h_final, out->hidden_all.data(), 0,
-                          out->hidden_all.size() * sizeof(float));
   {
     size_t row_bytes = (size_t)vocab * sizeof(float);
     ggml_backend_tensor_get(logits, out->logits_last.data(),
                             (size_t)(T - 1) * row_bytes, row_bytes);
+  }
+  if (read_hidden_host) {
+    out->hidden_all.assign((size_t)T * (size_t)hidden, 0.0f);
+    ggml_backend_tensor_get(h_final, out->hidden_all.data(), 0,
+                            out->hidden_all.size() * sizeof(float));
   }
 
   // Advance the cache write head. The arena and the sched allocation persist
@@ -303,11 +321,13 @@ static bool thinker_forward_core(const ThinkerWeights *tw, KVCache *kv,
 }
 
 // Prefill: reset the cache and write T positions in one shot. input_embed is
-// [T, hidden] f32 row-major.
+// [T, hidden] f32 row-major. read_hidden_host pulls the full final hidden back
+// to host for the dump path.
 static bool thinker_forward_prefill(const ThinkerWeights *tw, KVCache *kv,
                                     ggml_backend_sched_t sched,
                                     GraphArena *arena, const float *input_embed,
                                     int T, bool use_flash_attn, bool clamp_fp16,
+                                    bool read_hidden_host,
                                     ThinkerForwardOutput *out) {
   kv_cache_reset(kv);
   if (T > kv->max_seq_len) {
@@ -318,11 +338,13 @@ static bool thinker_forward_prefill(const ThinkerWeights *tw, KVCache *kv,
     return false;
   }
   return thinker_forward_core(tw, kv, sched, arena, input_embed, NULL, T, 0,
-                              use_flash_attn, clamp_fp16, out);
+                              use_flash_attn, clamp_fp16, read_hidden_host,
+                              out);
 }
 
 // Decode: feed one token id, gather its embedding on device, append one
-// position to the cache, attend to the [0, cur_len + 1) window.
+// position to the cache, attend to the [0, cur_len + 1) window. The logits
+// are the only readback on the hot path.
 static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
                                    ggml_backend_sched_t sched,
                                    GraphArena *arena, int32_t token_id,
@@ -336,5 +358,6 @@ static bool thinker_forward_decode(const ThinkerWeights *tw, KVCache *kv,
     return false;
   }
   return thinker_forward_core(tw, kv, sched, arena, NULL, &token_id, 1,
-                              kv->cur_len, use_flash_attn, clamp_fp16, out);
+                              kv->cur_len, use_flash_attn, clamp_fp16, false,
+                              out);
 }

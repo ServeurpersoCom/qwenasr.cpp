@@ -432,7 +432,7 @@ qa_status pipeline_asr_run(pipeline_asr *p, const float *pcm, size_t n_samples,
   ThinkerForwardOutput out;
   if (!thinker_forward_prefill(&p->tw, &kv, p->sched, &p->thinker_prefill_arena,
                                embed.data(), T, p->flash_attn, p->clamp_fp16,
-                               &out)) {
+                               !p->dump_dir.empty(), &out)) {
     kv_cache_free(&kv);
     qa_set_error("pipeline_asr_run: prefill failed");
     return QA_STATUS_GENERATE_FAILED;
