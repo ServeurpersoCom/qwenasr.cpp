@@ -28,20 +28,20 @@
 
 #include <cstdarg>
 
-void qa_set_error(const char *fmt, ...)
+void qa_set_error(const char * fmt, ...)
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 1, 2)))
 #endif
     ;
 
-void qa_set_error_v(const char *fmt, va_list ap);
+void qa_set_error_v(const char * fmt, va_list ap);
 
 // Throws std::runtime_error formatted with printf semantics. Tagged
 // noreturn so the compiler can prune unreachable branches at the call
 // site. Designed for the GGUF / model load path where any failure means
 // the model is unusable and unwinding to the ABI boundary is the only
 // sane recovery.
-[[noreturn]] void qa_throw(const char *fmt, ...)
+[[noreturn]] void qa_throw(const char * fmt, ...)
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 1, 2)))
 #endif
@@ -52,7 +52,7 @@ void qa_set_error_v(const char *fmt, va_list ap);
 // callback is set, so existing fprintf-style call sites can migrate
 // one at a time without changing user-visible behaviour. printf
 // semantics; messages longer than the internal buffer are truncated.
-void qa_log(enum qa_log_level level, const char *fmt, ...)
+void qa_log(enum qa_log_level level, const char * fmt, ...)
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 2, 3)))
 #endif
