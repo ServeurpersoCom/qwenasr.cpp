@@ -9,8 +9,10 @@
 //   GET  /health                   liveness probe
 //
 // Request fields (multipart): file (audio, required), model, language, prompt
-// (biasing context), response_format ("json" default or "text"). Response is
-// {"text": "..."} for json, the raw transcript for text.
+// (biasing context), response_format ("json" default or "text"), and the
+// optional sampling overrides temperature, top_k, top_p, repetition_penalty,
+// max_new_tokens, seed. Response is {"text": "..."} for json, the raw
+// transcript for text.
 
 #include "audio-io.h"
 #include "httplib.h"
@@ -19,7 +21,9 @@
 #include "version.h"
 #include "yyjson.h"
 
+#include <cfloat>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -91,6 +95,48 @@ static std::string asr_field(const httplib::Request & req, const char * name) {
     return std::string();
 }
 
+// Parse an optional numeric form field. Absent or empty leaves out
+// untouched; a malformed or out of domain value fails with err set.
+static bool asr_opt_num(const httplib::Request & req,
+                        const char *             name,
+                        double                   lo,
+                        double                   hi,
+                        float *                  out,
+                        std::string &            err) {
+    const std::string s = asr_field(req, name);
+    if (s.empty()) {
+        return true;
+    }
+    char *       end = nullptr;
+    const double d   = strtod(s.c_str(), &end);
+    if (end != s.c_str() + s.size() || d < lo || d > hi) {
+        err = std::string("'") + name + "' is out of domain";
+        return false;
+    }
+    *out = (float) d;
+    return true;
+}
+
+static bool asr_opt_int(const httplib::Request & req,
+                        const char *             name,
+                        int64_t                  lo,
+                        int64_t                  hi,
+                        int64_t *                out,
+                        std::string &            err) {
+    const std::string s = asr_field(req, name);
+    if (s.empty()) {
+        return true;
+    }
+    char *        end = nullptr;
+    const int64_t v   = strtoll(s.c_str(), &end, 10);
+    if (end != s.c_str() + s.size() || v < lo || v > hi) {
+        err = std::string("'") + name + "' is out of domain";
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 static int asr_status_to_http(qa_status rc) {
     if (rc == QA_STATUS_OK) {
         return 200;
@@ -121,7 +167,6 @@ static void asr_handle_transcriptions(const server_config &    cfg,
 
     const std::string language = asr_field(req, "language");
     const std::string prompt   = asr_field(req, "prompt");
-    const std::string temp     = asr_field(req, "temperature");
     std::string       format   = asr_field(req, "response_format");
     if (format.empty()) {
         format = "json";
@@ -130,9 +175,26 @@ static void asr_handle_transcriptions(const server_config &    cfg,
     struct qa_transcribe_params tp = qa_transcribe_default_params();
     tp.language                    = !language.empty() ? language.c_str() : cfg.language.c_str();
     tp.context                     = !prompt.empty() ? prompt.c_str() : nullptr;
-    if (!temp.empty()) {
-        tp.temperature = (float) atof(temp.c_str());
+
+    // Optional sampling overrides on the ABI defaults. Domains follow
+    // the ABI semantics: temperature 0 is greedy, top_k 0 and top_p 1
+    // disable those filters, seed forwards verbatim (-1 draws random).
+    std::string perr;
+    int64_t     top_k   = tp.top_k;
+    int64_t     max_new = tp.max_new_tokens;
+    const bool  ok      = asr_opt_num(req, "temperature", 0.0, FLT_MAX, &tp.temperature, perr) &&
+                    asr_opt_num(req, "top_p", DBL_MIN, 1.0, &tp.top_p, perr) &&
+                    asr_opt_num(req, "repetition_penalty", DBL_MIN, FLT_MAX, &tp.repetition_penalty, perr) &&
+                    asr_opt_int(req, "top_k", 0, INT32_MAX, &top_k, perr) &&
+                    asr_opt_int(req, "max_new_tokens", 1, INT32_MAX, &max_new, perr) &&
+                    asr_opt_int(req, "seed", INT64_MIN, INT64_MAX, &tp.seed, perr);
+    if (!ok) {
+        free(pcm);
+        asr_json_error(res, 400, "invalid_request_error", perr.c_str());
+        return;
     }
+    tp.top_k          = (int) top_k;
+    tp.max_new_tokens = (int) max_new;
 
     char *    text = nullptr;
     qa_status rc;

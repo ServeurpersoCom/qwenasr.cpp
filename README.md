@@ -77,7 +77,11 @@ curl -s -X POST http://127.0.0.1:8090/v1/audio/transcriptions \
 ```
 
 Language is auto detected when `--lang` is omitted. Pass `--context`
-(CLI) or the `prompt` field (server) to bias the transcript.
+(CLI) or the `prompt` field (server) to bias the transcript. The form
+also accepts optional sampling overrides (`temperature`, `top_k`,
+`top_p`, `repetition_penalty`, `max_new_tokens`, `seed`); unset fields
+keep the engine defaults and a fixed seed makes a sampled request
+reproducible.
 
 ## Embedding the library
 
