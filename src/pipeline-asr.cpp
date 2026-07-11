@@ -435,6 +435,11 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
 
     int next = sample();
 
+    // Static decode graph, one live attention-window class replayed across the
+    // token loop. Scoped to this request: the arena and the sched allocation it
+    // references are reset by the next request prefill.
+    ThinkerDecodeGraph dg = {};
+
     for (int step = 0; step < max_new; step++) {
         if (next == p->sp.im_end || next == p->sp.eos) {
             break;
@@ -450,8 +455,8 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
         }
 
         Timer t_dec;
-        if (!thinker_forward_decode(&p->tw, &kv, p->sched, &p->thinker_decode_arena, next, p->flash_attn, p->clamp_fp16,
-                                    &out)) {
+        if (!thinker_forward_decode(&p->tw, &kv, p->sched, &p->thinker_decode_arena, &dg, next, p->flash_attn,
+                                    p->clamp_fp16, &out)) {
             kv_cache_free(&kv);
             qa_set_error("pipeline_asr_run: decode failed");
             return QA_STATUS_GENERATE_FAILED;
