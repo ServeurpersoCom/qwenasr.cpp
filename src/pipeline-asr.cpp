@@ -449,14 +449,16 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
         std::string delta = detok_feed(&sd, next);
         if (params->on_token && !delta.empty()) {
             if (!params->on_token(delta.c_str(), params->user)) {
+                thinker_decode_graph_free(&dg, p->sched);
                 kv_cache_free(&kv);
                 return QA_STATUS_CANCELLED;
             }
         }
 
         Timer t_dec;
-        if (!thinker_forward_decode(&p->tw, &kv, p->sched, &p->thinker_decode_arena, &dg, next, p->flash_attn,
-                                    p->clamp_fp16, &out)) {
+        if (!thinker_forward_decode(&p->tw, &kv, p->backend.backend, p->sched, &p->thinker_decode_arena, &dg, next,
+                                    p->flash_attn, p->clamp_fp16, &out)) {
+            thinker_decode_graph_free(&dg, p->sched);
             kv_cache_free(&kv);
             qa_set_error("pipeline_asr_run: decode failed");
             return QA_STATUS_GENERATE_FAILED;
@@ -466,6 +468,7 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
     }
 
     text = detok_text(&sd);
+    thinker_decode_graph_free(&dg, p->sched);
     kv_cache_free(&kv);
 
     perf.n_tokens = (int) gen.size();

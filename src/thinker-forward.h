@@ -20,6 +20,7 @@
 #include "ggml.h"
 #include "graph-arena.h"
 #include "kv-cache.h"
+#include "static-graph.h"
 #include "thinker-weights.h"
 
 #include <cmath>
@@ -52,15 +53,24 @@ struct ThinkerForwardOutput {
 // but the shape holds until n_kv_pad crosses the next 256 boundary, which flips
 // key_n_kv_pad and forces one rebuild.
 struct ThinkerDecodeGraph {
-    bool                 built        = false;
-    int                  key_n_kv_pad = 0;
-    struct ggml_cgraph * gf           = nullptr;
-    struct ggml_tensor * ids_in       = nullptr;
-    struct ggml_tensor * pos_in       = nullptr;
-    struct ggml_tensor * mask_in      = nullptr;
-    struct ggml_tensor * rows_in      = nullptr;
-    struct ggml_tensor * logits       = nullptr;
+    bool                     built        = false;
+    int                      key_n_kv_pad = 0;
+    struct ggml_cgraph *     gf           = nullptr;
+    struct ggml_tensor *     ids_in       = nullptr;
+    struct ggml_tensor *     pos_in       = nullptr;
+    struct ggml_tensor *     mask_in      = nullptr;
+    struct ggml_tensor *     rows_in      = nullptr;
+    struct ggml_tensor *     logits       = nullptr;
+    StaticGraph              graph;
+    std::vector<int32_t>     pos;
+    std::vector<int64_t>     rows;
+    std::vector<ggml_fp16_t> mask;
 };
+
+static void thinker_decode_graph_free(ThinkerDecodeGraph * dg, ggml_backend_sched_t sched) {
+    static_graph_release(&dg->graph, sched);
+    dg->built = false;
+}
 
 // Manual F32 attention chain (use_flash_attn false): GQA scaled dot product
 // with explicit mul_mat / soft_max_ext / mul_mat, F32 accumulators end to end.
@@ -189,6 +199,7 @@ static struct ggml_tensor * thinker_layer_forward(struct ggml_context *  ctx,
 // persistent arena.
 static bool thinker_forward_core(const ThinkerWeights * tw,
                                  KVCache *              kv,
+                                 ggml_backend_t         backend,
                                  ggml_backend_sched_t   sched,
                                  GraphArena *           arena,
                                  ThinkerDecodeGraph *   cache,
@@ -223,6 +234,10 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
 
     const bool need_build = !cache || !cache->built || cache->key_n_kv_pad != n_kv_pad;
     if (need_build) {
+        if (cache) {
+            static_graph_release(&cache->graph, sched);
+            cache->built = false;
+        }
         const int             max_nodes = thinker_graph_max_nodes(n_layers);
         struct ggml_context * gctx      = graph_arena_begin(arena);
 
@@ -272,8 +287,12 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
 
         ggml_build_forward_expand(gf, logits);
 
-        ggml_backend_sched_reset(sched);
-        if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+        bool alloc_ok = cache ? static_graph_alloc(&cache->graph, backend, sched, gf) : false;
+        if (!cache) {
+            ggml_backend_sched_reset(sched);
+            alloc_ok = ggml_backend_sched_alloc_graph(sched, gf);
+        }
+        if (!alloc_ok) {
             fprintf(stderr, "[ThinkerForward] FATAL: graph allocation failed\n");
             ggml_backend_sched_reset(sched);
             return false;
@@ -287,7 +306,10 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
             cache->rows_in      = rows_in;
             cache->logits       = logits;
             cache->key_n_kv_pad = n_kv_pad;
-            cache->built        = true;
+            cache->pos.resize((size_t) T);
+            cache->rows.resize((size_t) T);
+            cache->mask.resize((size_t) T * (size_t) n_kv_pad);
+            cache->built = true;
         }
     } else {
         gf      = cache->gf;
@@ -304,26 +326,28 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
         ggml_backend_tensor_set(x_in, input_embed, 0, (size_t) T * (size_t) hidden * sizeof(float));
     }
 
-    {
-        std::vector<int32_t> pos((size_t) T);
-        for (int i = 0; i < T; i++) {
-            pos[(size_t) i] = n_past + i;
-        }
-        ggml_backend_tensor_set(pos_in, pos.data(), 0, (size_t) T * sizeof(int32_t));
+    std::vector<int32_t>       pos_local;
+    std::vector<int64_t>       rows_local;
+    std::vector<ggml_fp16_t>   mask_local;
+    std::vector<int32_t> &     pos  = cache ? cache->pos : pos_local;
+    std::vector<int64_t> &     rows = cache ? cache->rows : rows_local;
+    std::vector<ggml_fp16_t> & mask = cache ? cache->mask : mask_local;
+    pos.resize((size_t) T);
+    rows.resize((size_t) T);
+    mask.resize((size_t) T * (size_t) n_kv_pad);
 
-        std::vector<int64_t> rows((size_t) T);
-        for (int i = 0; i < T; i++) {
-            rows[(size_t) i] = (int64_t) (n_past + i);
-        }
-        ggml_backend_tensor_set(rows_in, rows.data(), 0, (size_t) T * sizeof(int64_t));
+    for (int i = 0; i < T; i++) {
+        pos[(size_t) i]  = n_past + i;
+        rows[(size_t) i] = (int64_t) (n_past + i);
     }
+    ggml_backend_tensor_set(pos_in, pos.data(), 0, (size_t) T * sizeof(int32_t));
+    ggml_backend_tensor_set(rows_in, rows.data(), 0, (size_t) T * sizeof(int64_t));
 
     // Causal mask [T_q, n_kv_pad], 0 where k <= n_past + q, neg inf otherwise,
     // padded tail included.
     {
-        std::vector<ggml_fp16_t> mask((size_t) T * (size_t) n_kv_pad);
-        const ggml_fp16_t        zero    = ggml_fp32_to_fp16(0.0f);
-        const ggml_fp16_t        neg_inf = ggml_fp32_to_fp16(-INFINITY);
+        const ggml_fp16_t zero    = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t neg_inf = ggml_fp32_to_fp16(-INFINITY);
         for (size_t i = 0; i < mask.size(); i++) {
             mask[i] = neg_inf;
         }
@@ -336,7 +360,9 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
         ggml_backend_tensor_set(mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     }
 
-    if (ggml_backend_sched_graph_compute(sched, gf) != GGML_STATUS_SUCCESS) {
+    enum ggml_status st =
+        cache ? static_graph_compute(&cache->graph, backend, sched, gf) : ggml_backend_sched_graph_compute(sched, gf);
+    if (st != GGML_STATUS_SUCCESS) {
         fprintf(stderr, "[ThinkerForward] FATAL: graph compute failed\n");
         ggml_backend_sched_reset(sched);
         return false;
@@ -379,8 +405,8 @@ static bool thinker_forward_prefill(const ThinkerWeights * tw,
         fprintf(stderr, "[ThinkerForward] FATAL: prefill T=%d exceeds cache max_seq_len=%d\n", T, kv->max_seq_len);
         return false;
     }
-    return thinker_forward_core(tw, kv, sched, arena, nullptr, input_embed, NULL, T, 0, use_flash_attn, clamp_fp16,
-                                read_hidden_host, out);
+    return thinker_forward_core(tw, kv, nullptr, sched, arena, nullptr, input_embed, NULL, T, 0, use_flash_attn,
+                                clamp_fp16, read_hidden_host, out);
 }
 
 // Decode: feed one token id, gather its embedding on device, append one
@@ -388,6 +414,7 @@ static bool thinker_forward_prefill(const ThinkerWeights * tw,
 // are the only readback on the hot path.
 static bool thinker_forward_decode(const ThinkerWeights * tw,
                                    KVCache *              kv,
+                                   ggml_backend_t         backend,
                                    ggml_backend_sched_t   sched,
                                    GraphArena *           arena,
                                    ThinkerDecodeGraph *   cache,
@@ -400,6 +427,6 @@ static bool thinker_forward_decode(const ThinkerWeights * tw,
                 kv->max_seq_len);
         return false;
     }
-    return thinker_forward_core(tw, kv, sched, arena, cache, NULL, &token_id, 1, kv->cur_len, use_flash_attn,
+    return thinker_forward_core(tw, kv, backend, sched, arena, cache, NULL, &token_id, 1, kv->cur_len, use_flash_attn,
                                 clamp_fp16, false, out);
 }
