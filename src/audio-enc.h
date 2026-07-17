@@ -71,6 +71,13 @@ static bool audio_enc_load(AudioEnc * w, const GGUFModel & gf, ggml_backend_t ba
     w->cfg.n_layer    = (int) gf_get_u32(gf, "qwenasr.audio.encoder_layers");
     w->cfg.ffn        = (int) gf_get_u32(gf, "qwenasr.audio.encoder_ffn_dim");
     w->cfg.output_dim = (int) gf_get_u32(gf, "qwenasr.audio.output_dim");
+
+    if (w->cfg.n_layer <= 0 || w->cfg.d_model <= 0) {
+        fprintf(stderr, "[AudioEnc] FATAL: invalid hyperparameters (layers=%d d_model=%d)\n", w->cfg.n_layer,
+                w->cfg.d_model);
+        return false;
+    }
+
     w->layers.resize((size_t) w->cfg.n_layer);
 
     wctx_init(&w->wctx, w->cfg.n_layer * 16 + 6);
