@@ -428,9 +428,13 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
     // transcript reaches the stream and the final result.
     StreamDetok sd;
     detok_init(&sd, &p->tok, p->sp.asr_text);
-    auto sample = [&]() {
+    const bool greedy = params->temperature <= 0.0f;
+    auto       sample = [&]() {
+        if (out.next_id >= 0) {
+            return out.next_id;
+        }
         return sample_top_k_p(out.logits_last.data(), vocab, params->temperature, params->top_k, params->top_p,
-                              params->repetition_penalty, gen.data(), (int) gen.size(), seed, subseq++, nullptr);
+                                    params->repetition_penalty, gen.data(), (int) gen.size(), seed, subseq++, nullptr);
     };
 
     int next = sample();
@@ -457,7 +461,7 @@ qa_status pipeline_asr_run(pipeline_asr *               p,
 
         Timer t_dec;
         if (!thinker_forward_decode(&p->tw, &kv, p->backend.backend, p->sched, &p->thinker_decode_arena, &dg, next,
-                                    p->flash_attn, p->clamp_fp16, &out)) {
+                                    p->flash_attn, p->clamp_fp16, greedy, &out)) {
             thinker_decode_graph_free(&dg, p->sched);
             kv_cache_free(&kv);
             qa_set_error("pipeline_asr_run: decode failed");

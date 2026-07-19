@@ -37,11 +37,16 @@ static int thinker_graph_max_nodes(int n_layers) {
 struct ThinkerForwardOutput {
     // Final hidden state for every position [T, hidden] f32 (post final norm).
     // Filled only when read_hidden_host is set (dump path); the decode hot loop
-    // reads back the logits alone.
+    // reads back the argmax id alone.
     std::vector<float> hidden_all;
 
-    // Output logits for the last position [vocab] f32.
+    // Output logits for the last position [vocab] f32. Empty when the greedy
+    // decode path resolves the token on device.
     std::vector<float> logits_last;
+
+    // Device argmax of the last position logits on the greedy decode path,
+    // -1 when the full logits row is read back instead.
+    int next_id;
 
     int hidden;
     int vocab;
@@ -61,6 +66,7 @@ struct ThinkerDecodeGraph {
     struct ggml_tensor *     mask_in      = nullptr;
     struct ggml_tensor *     rows_in      = nullptr;
     struct ggml_tensor *     logits       = nullptr;
+    struct ggml_tensor *     argmax       = nullptr;
     StaticGraph              graph;
     std::vector<int32_t>     pos;
     std::vector<int64_t>     rows;
@@ -209,6 +215,7 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
                                  int                    n_past,
                                  bool                   use_flash_attn,
                                  bool                   clamp_fp16,
+                                 bool                   greedy,
                                  bool                   read_hidden_host,
                                  ThinkerForwardOutput * out) {
     const int hidden   = tw->hidden_size;
@@ -223,14 +230,15 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
     const int kv_pad_raw = (int) GGML_PAD(T_full, 256);
     const int n_kv_pad   = kv_pad_raw < kv->max_seq_len ? kv_pad_raw : kv->max_seq_len;
 
-    struct ggml_cgraph * gf      = nullptr;
-    struct ggml_tensor * ids_in  = nullptr;
-    struct ggml_tensor * x_in    = nullptr;
-    struct ggml_tensor * pos_in  = nullptr;
-    struct ggml_tensor * mask_in = nullptr;
-    struct ggml_tensor * rows_in = nullptr;
-    struct ggml_tensor * h_final = nullptr;
-    struct ggml_tensor * logits  = nullptr;
+    struct ggml_cgraph * gf       = nullptr;
+    struct ggml_tensor * ids_in   = nullptr;
+    struct ggml_tensor * x_in     = nullptr;
+    struct ggml_tensor * pos_in   = nullptr;
+    struct ggml_tensor * mask_in  = nullptr;
+    struct ggml_tensor * rows_in  = nullptr;
+    struct ggml_tensor * h_final  = nullptr;
+    struct ggml_tensor * logits   = nullptr;
+    struct ggml_tensor * argmax_t = nullptr;
 
     const bool need_build = !cache || !cache->built || cache->key_n_kv_pad != n_kv_pad;
     if (need_build) {
@@ -283,9 +291,19 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
         }
 
         logits = ggml_mul_mat(gctx, tw->output_w, h_final);  // [vocab, T]
-        ggml_set_output(logits);
 
-        ggml_build_forward_expand(gf, logits);
+        // Greedy decode resolves the token on device: argmax over the vocab
+        // axis, one i32 per position, so the hot loop reads back 4 bytes
+        // instead of the full logits row. The sampling path keeps the full
+        // row readback.
+        if (greedy && token_ids) {
+            argmax_t = ggml_argmax(gctx, logits);  // [T] i32
+            ggml_set_output(argmax_t);
+            ggml_build_forward_expand(gf, argmax_t);
+        } else {
+            ggml_set_output(logits);
+            ggml_build_forward_expand(gf, logits);
+        }
 
         bool alloc_ok = cache ? static_graph_alloc(&cache->graph, backend, sched, gf) : false;
         if (!cache) {
@@ -305,6 +323,7 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
             cache->mask_in      = mask_in;
             cache->rows_in      = rows_in;
             cache->logits       = logits;
+            cache->argmax       = argmax_t;
             cache->key_n_kv_pad = n_kv_pad;
             cache->pos.resize((size_t) T);
             cache->rows.resize((size_t) T);
@@ -312,12 +331,13 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
             cache->built = true;
         }
     } else {
-        gf      = cache->gf;
-        ids_in  = cache->ids_in;
-        pos_in  = cache->pos_in;
-        mask_in = cache->mask_in;
-        rows_in = cache->rows_in;
-        logits  = cache->logits;
+        gf       = cache->gf;
+        ids_in   = cache->ids_in;
+        pos_in   = cache->pos_in;
+        mask_in  = cache->mask_in;
+        rows_in  = cache->rows_in;
+        logits   = cache->logits;
+        argmax_t = cache->argmax;
     }
 
     if (token_ids) {
@@ -371,8 +391,14 @@ static bool thinker_forward_core(const ThinkerWeights * tw,
     out->hidden   = hidden;
     out->vocab    = vocab;
     out->n_tokens = T;
-    out->logits_last.assign((size_t) vocab, 0.0f);
-    {
+    if (argmax_t) {
+        int32_t id = -1;
+        ggml_backend_tensor_get(argmax_t, &id, (size_t) (T - 1) * sizeof(int32_t), sizeof(int32_t));
+        out->next_id = (int) id;
+        out->logits_last.clear();
+    } else {
+        out->next_id = -1;
+        out->logits_last.assign((size_t) vocab, 0.0f);
         size_t row_bytes = (size_t) vocab * sizeof(float);
         ggml_backend_tensor_get(logits, out->logits_last.data(), (size_t) (T - 1) * row_bytes, row_bytes);
     }
@@ -406,12 +432,13 @@ static bool thinker_forward_prefill(const ThinkerWeights * tw,
         return false;
     }
     return thinker_forward_core(tw, kv, nullptr, sched, arena, nullptr, input_embed, NULL, T, 0, use_flash_attn,
-                                clamp_fp16, read_hidden_host, out);
+                                clamp_fp16, false, read_hidden_host, out);
 }
 
 // Decode: feed one token id, gather its embedding on device, append one
-// position to the cache, attend to the [0, cur_len + 1) window. The logits
-// are the only readback on the hot path.
+// position to the cache, attend to the [0, cur_len + 1) window. Greedy runs
+// the argmax on device and reads back one i32; sampling reads back the full
+// logits row.
 static bool thinker_forward_decode(const ThinkerWeights * tw,
                                    KVCache *              kv,
                                    ggml_backend_t         backend,
@@ -421,6 +448,7 @@ static bool thinker_forward_decode(const ThinkerWeights * tw,
                                    int32_t                token_id,
                                    bool                   use_flash_attn,
                                    bool                   clamp_fp16,
+                                   bool                   greedy,
                                    ThinkerForwardOutput * out) {
     if (kv->cur_len + 1 > kv->max_seq_len) {
         fprintf(stderr, "[ThinkerForward] FATAL: decode would overflow cache (%d + 1 > %d)\n", kv->cur_len,
@@ -428,5 +456,5 @@ static bool thinker_forward_decode(const ThinkerWeights * tw,
         return false;
     }
     return thinker_forward_core(tw, kv, backend, sched, arena, cache, NULL, &token_id, 1, kv->cur_len, use_flash_attn,
-                                clamp_fp16, false, out);
+                                clamp_fp16, greedy, false, out);
 }
