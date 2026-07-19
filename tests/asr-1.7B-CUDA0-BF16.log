@@ -1,90 +1,3 @@
-[WAV] Read buffer: 80000 samples, 16000 Hz, 1 ch, 16 bit
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Audio backend: CUDA0 (CPU threads: 16)
-qwenasr-feat 45bb8e8 (2026-06-15): mel [128, 3000] on CUDA0 -> cpp/mel.bin
-[WAV] Read buffer: 80000 samples, 16000 Hz, 1 ch, 16 bit
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Audio backend: CUDA0 (CPU threads: 16)
-qwenasr-feat 45bb8e8 (2026-06-15): mel [128, 500] on CUDA0 -> cpp/mel.bin
-[GGUF] ../models/qwenasr-1.7B-BF16.gguf: 708 tensors, data at offset 5362688
-[WeightCtx] Loaded 7 tensors, 45.8 MB into backend
-[ConvStem] Loaded: downsample_hidden 480, d_model 1024
-qwenasr-feat 45bb8e8 (2026-06-15): stem [63, 1024] -> cpp/stem.bin
-[WAV] Read buffer: 80000 samples, 16000 Hz, 1 ch, 16 bit
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Audio backend: CUDA0 (CPU threads: 16)
-qwenasr-feat 45bb8e8 (2026-06-15): mel [128, 500] on CUDA0 -> cpp/mel.bin
-[GGUF] ../models/qwenasr-1.7B-BF16.gguf: 708 tensors, data at offset 5362688
-[WeightCtx] Loaded 7 tensors, 45.8 MB into backend
-[ConvStem] Loaded: downsample_hidden 480, d_model 1024
-qwenasr-feat 45bb8e8 (2026-06-15): stem [63, 1024] -> cpp/stem.bin
-[WeightCtx] Loaded 390 tensors, 1165.2 MB into backend
-[AudioEnc] Loaded: 24 layers, d_model 1024, heads 16, head_dim 64, FFN 4096, output_dim 2048
-qwenasr-feat 45bb8e8 (2026-06-15): encoder [63, 2048] -> cpp/encoder.bin
-[WAV] Read buffer: 144000 samples, 16000 Hz, 1 ch, 16 bit
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Audio backend: CUDA0 (CPU threads: 16)
-qwenasr-feat 45bb8e8 (2026-06-15): mel [128, 900] on CUDA0 -> cpp/mel.bin
-[GGUF] ../models/qwenasr-1.7B-BF16.gguf: 708 tensors, data at offset 5362688
-[WeightCtx] Loaded 7 tensors, 45.8 MB into backend
-[ConvStem] Loaded: downsample_hidden 480, d_model 1024
-qwenasr-feat 45bb8e8 (2026-06-15): stem [113, 1024] -> cpp/stem.bin
-[WeightCtx] Loaded 7 tensors, 45.8 MB into backend
-[ConvStem] Loaded: downsample_hidden 480, d_model 1024
-[WeightCtx] Loaded 390 tensors, 1165.2 MB into backend
-[AudioEnc] Loaded: 24 layers, d_model 1024, heads 16, head_dim 64, FFN 4096, output_dim 2048
-qwenasr-feat 45bb8e8 (2026-06-15): windowed [117, 2048] 9 chunks -> cpp/windowed.bin
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Thinker backend: CUDA0 (CPU threads: 16)
-[GGUF] ../models/qwenasr-1.7B-BF16.gguf: 708 tensors, data at offset 5362688
-[WeightCtx] Loaded 311 tensors, 7750.5 MB into backend
-[Thinker] Loaded: 28 layers, hidden 2048, heads 16/8, head_dim 128, FFN 6144, RoPE theta 1000000, vocab 151936, tie_embd 1
-[KVCache] Allocated: 28 layers, 8 KV heads, head_dim 128, max_seq_len 12 -> 2 MB
-qwenasr-thinker 45bb8e8 (2026-06-15): hidden [12, 2048] logits [151936] on CUDA0
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
-  Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
-load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
-ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
-load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
-load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
-[Load] Thinker backend: CUDA0 (CPU threads: 16)
-[GGUF] ../models/qwenasr-1.7B-BF16.gguf: 708 tensors, data at offset 5362688
-[WeightCtx] Loaded 311 tensors, 7750.5 MB into backend
-[Thinker] Loaded: 28 layers, hidden 2048, heads 16/8, head_dim 128, FFN 6144, RoPE theta 1000000, vocab 151936, tie_embd 1
-qwenasr-thinker 45bb8e8 (2026-06-15): spliced 117 audio states at pos 4
-[KVCache] Allocated: 28 layers, 8 KV heads, head_dim 128, max_seq_len 124 -> 27 MB
-qwenasr-thinker 45bb8e8 (2026-06-15): hidden [124, 2048] logits [151936] on CUDA0
 [WAV] Read buffer: 380672 samples, 22050 Hz, 1 ch, 16 bit
 [Audio-Resample] 22050 Hz -> 16000 Hz, 380672 samples...
 [Audio-Resample] Done: 380672 -> 276225 samples
@@ -92,7 +5,7 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
   Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
 load_backend: loaded CUDA backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cuda.so
 ggml_vulkan: Found 1 Vulkan devices:
-ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+ggml_vulkan: 0 = NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA) | uma: 0 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
 load_backend: loaded Vulkan backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-vulkan.so
 load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libggml-cpu-zen4.so
 [Load] Pipeline backend: CUDA0 (CPU threads: 16)
@@ -104,26 +17,31 @@ load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libgg
 [WeightCtx] Loaded 311 tensors, 7750.5 MB into backend
 [Thinker] Loaded: 28 layers, hidden 2048, heads 16/8, head_dim 128, FFN 6144, RoPE theta 1000000, vocab 151936, tie_embd 1
 [BPE] Loaded from GGUF: 151705 vocab, 151291 merges, eos_id=151643
-[qwenasr] qwenasr.cpp 45bb8e8 (2026-06-15)
-[KVCache] Allocated: 28 layers, 8 KV heads, head_dim 128, max_seq_len 755 -> 165 MB
+[Dump] cpp/pcm16.bin [276225 floats]
+[Dump] cpp/mel.bin [220928 floats]
+[Dump] cpp/stem.bin [230400 floats]
+[Dump] cpp/windowed.bin [460800 floats]
+[KVCache] Allocated: 28 layers, 8 KV heads, head_dim 128, max_seq_len 755 -> 82 MB
+[Dump] cpp/hidden.bin [497664 floats]
+[Dump] cpp/logits.bin [151936 floats]
+ggml_backend_cuda_graph_compute: CUDA graph warmup complete
+ggml_backend_cuda_graph_compute: CUDA graph warmup reset
+ggml_backend_cuda_graph_compute: CUDA graph warmup complete
 [Perf] Resample 0.1 ms
-[Perf] Mel 4.5 ms
-[Perf] Tower 36.4 ms
+[Perf] Mel 5.0 ms
+[Perf] Tower 41.4 ms
 [Perf] Build 0.8 ms (embed + audio splice)
-[Perf] Prefill 34.6 ms
-[Perf] Embed 1.4 ms (per token get_rows roundtrip)
-[Perf] Decode 333.3 ms (51 tokens, 6.53 ms/tok, 153.0 tok/s)
-[Perf] Total 418.1 ms (audio 17.26 s, RTF 0.024)
-[Mel] shape (128, 3000) cosine 0.99999988 max_abs 1.295e-04
-[Stem] shape (63, 1024) cosine 0.99999976 max_abs 2.517e-03
-[Enc] shape (63, 2048) cosine 0.99999756 max_abs 1.034e-03
-[Win] shape (117, 2048) chunks 9 cosine 0.99999881 max_abs 3.978e-04
-[Dec] shape (12, 2048) cosine 0.99999934 max_abs 2.369e-01
-[Pre] shape (124, 2048) S 117 cosine 0.99999726 max_abs 3.555e-01
-[GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-1.7B-BF16.gguf --file ../examples/freeman.wav --lang English -o cpp/asr-cpp.txt
+[Perf] Prefill 12.0 ms
+[Perf] Decode 260.5 ms (51 tokens, 5.11 ms/tok, 195.8 tok/s)
+[Perf] Total 330.8 ms (audio 17.26 s, RTF 0.019)
+[GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-1.7B-BF16.gguf --file ../examples/freeman.wav --lang English --dump cpp -o cpp/asr-cpp.txt
 [GGML] Text: "If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you're going to be with. You know, people say, well."
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.09it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  3.73it/s]
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 128.50it/s]
 The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
 Setting `pad_token_id` to `eos_token_id`:151645 for open-end generation.
 [Python] Text: 'If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you\'re going to be with. You know, people say, "Well."'
+[Cossim] Mel cos 0.99999862 max_abs 3.780e-03 n 220928
+[Cossim] Stem cos 0.99972071 max_abs 1.474e+00 n 230400
+[Cossim] Windowed cos 0.99082289 max_abs 1.003e-01 n 460800
+[Cossim] Hidden cos 0.99545376 max_abs 5.037e+01 n 497664
 [Cossim] Text exact 0.00% norm_exact 100.00% word_ratio 1.000000
