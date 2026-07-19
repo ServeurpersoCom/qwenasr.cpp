@@ -65,8 +65,8 @@ static bool kv_cache_init(KVCache *      kv,
     }
 
     for (int l = 0; l < n_layers; l++) {
-        kv->k[(size_t) l] = ggml_new_tensor_3d(kv->ctx, GGML_TYPE_F32, head_dim, max_seq_len, n_kv_heads);
-        kv->v[(size_t) l] = ggml_new_tensor_3d(kv->ctx, GGML_TYPE_F32, head_dim, max_seq_len, n_kv_heads);
+        kv->k[(size_t) l] = ggml_new_tensor_3d(kv->ctx, GGML_TYPE_F16, head_dim, max_seq_len, n_kv_heads);
+        kv->v[(size_t) l] = ggml_new_tensor_3d(kv->ctx, GGML_TYPE_F16, head_dim, max_seq_len, n_kv_heads);
         char name[64];
         snprintf(name, sizeof(name), "kv_k_l%d", l);
         ggml_set_name(kv->k[(size_t) l], name);
@@ -85,7 +85,7 @@ static bool kv_cache_init(KVCache *      kv,
     // Zero-init the buffer so any out of bounds read returns a known value.
     ggml_backend_buffer_clear(kv->buffer, 0);
 
-    size_t bytes_per_layer = (size_t) head_dim * (size_t) max_seq_len * (size_t) n_kv_heads * sizeof(float);
+    size_t bytes_per_layer = (size_t) head_dim * (size_t) max_seq_len * (size_t) n_kv_heads * sizeof(ggml_fp16_t);
     size_t total_mb        = (size_t) (2 * n_layers) * bytes_per_layer / (1024 * 1024);
     fprintf(stderr,
             "[KVCache] Allocated: %d layers, %d KV heads, head_dim %d, "

@@ -168,8 +168,10 @@ static struct ggml_tensor * thinker_layer_forward(struct ggml_context *  ctx,
     float                scale = 1.0f / sqrtf((float) hd);
     struct ggml_tensor * attn;
     if (use_flash_attn) {
+        // Default precision reads the F16 cache natively with the vector
+        // kernel; the qk-norm in Qwen3 bounds the attention scores so F16
+        // accumulation holds.
         attn = ggml_flash_attn_ext(ctx, q_p, k_full, v_full, mask, scale, 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_prec(attn, GGML_PREC_F32);
     } else {
         attn = thinker_attn_f32(ctx, q_p, k_full, v_full, mask, scale);
     }
