@@ -26,11 +26,11 @@ load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libgg
 [Dump] cpp/logits.bin [151936 floats]
 [Perf] Resample 0.1 ms
 [Perf] Mel 3.5 ms
-[Perf] Tower 215.0 ms
+[Perf] Tower 208.9 ms
 [Perf] Build 0.2 ms (embed + audio splice)
-[Perf] Prefill 252.7 ms
-[Perf] Decode 534.1 ms (53 tokens, 10.08 ms/tok, 99.2 tok/s)
-[Perf] Total 1011.3 ms (audio 17.26 s, RTF 0.059)
+[Perf] Prefill 253.8 ms
+[Perf] Decode 538.9 ms (53 tokens, 10.17 ms/tok, 98.3 tok/s)
+[Perf] Total 1010.9 ms (audio 17.26 s, RTF 0.059)
 The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
 Setting `pad_token_id` to `eos_token_id`:151645 for open-end generation.
 [GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-0.6B-Q8_0.gguf --file ../examples/freeman.wav --lang English --dump cpp -o cpp/asr-cpp.txt

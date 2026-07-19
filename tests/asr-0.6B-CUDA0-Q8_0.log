@@ -28,12 +28,12 @@ ggml_backend_cuda_graph_compute: CUDA graph warmup complete
 ggml_backend_cuda_graph_compute: CUDA graph warmup reset
 ggml_backend_cuda_graph_compute: CUDA graph warmup complete
 [Perf] Resample 0.1 ms
-[Perf] Mel 4.9 ms
-[Perf] Tower 61.7 ms
-[Perf] Build 0.8 ms (embed + audio splice)
-[Perf] Prefill 10.5 ms
-[Perf] Decode 73.9 ms (53 tokens, 1.39 ms/tok, 717.3 tok/s)
-[Perf] Total 153.4 ms (audio 17.26 s, RTF 0.009)
+[Perf] Mel 4.8 ms
+[Perf] Tower 60.5 ms
+[Perf] Build 1.0 ms (embed + audio splice)
+[Perf] Prefill 10.4 ms
+[Perf] Decode 73.4 ms (53 tokens, 1.38 ms/tok, 722.1 tok/s)
+[Perf] Total 151.6 ms (audio 17.26 s, RTF 0.009)
 The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
 Setting `pad_token_id` to `eos_token_id`:151645 for open-end generation.
 [GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-0.6B-Q8_0.gguf --file ../examples/freeman.wav --lang English --dump cpp -o cpp/asr-cpp.txt

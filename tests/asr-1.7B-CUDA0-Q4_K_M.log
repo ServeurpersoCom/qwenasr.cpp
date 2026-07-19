@@ -24,24 +24,19 @@ load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libgg
 [KVCache] Allocated: 28 layers, 8 KV heads, head_dim 128, max_seq_len 755 -> 82 MB
 [Dump] cpp/hidden.bin [497664 floats]
 [Dump] cpp/logits.bin [151936 floats]
-CUDA Graph id 11 reused
 ggml_backend_cuda_graph_compute: CUDA graph warmup complete
-CUDA Graph id 11 reused
-[Dedup] Previous line repeated 11 times total
 ggml_backend_cuda_graph_compute: CUDA graph warmup reset
-CUDA Graph id 14 reused
 ggml_backend_cuda_graph_compute: CUDA graph warmup complete
-CUDA Graph id 14 reused
 [Perf] Resample 0.1 ms
-[Perf] Mel 4.7 ms
-[Perf] Tower 65.9 ms
-[Perf] Build 36.6 ms (embed + audio splice)
-[Perf] Prefill 12.8 ms
-[Perf] Decode 321.1 ms (52 tokens, 6.18 ms/tok, 161.9 tok/s)
-[Perf] Total 444.0 ms (audio 17.26 s, RTF 0.026)
+[Perf] Mel 4.5 ms
+[Perf] Tower 66.4 ms
+[Perf] Build 1.2 ms (embed + audio splice)
+[Perf] Prefill 13.0 ms
+[Perf] Decode 88.9 ms (52 tokens, 1.71 ms/tok, 585.2 tok/s)
+[Perf] Total 175.9 ms (audio 17.26 s, RTF 0.010)
 [GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-1.7B-Q4_K_M.gguf --file ../examples/freeman.wav --lang English --dump cpp -o cpp/asr-cpp.txt
 [GGML] Text: 'If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you\'re going to be with. You know, people say, "Well."'
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 124.67it/s]
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 125.16it/s]
 The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
 Setting `pad_token_id` to `eos_token_id`:151645 for open-end generation.
 [Python] Text: 'If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you\'re going to be with. You know, people say, "Well."'

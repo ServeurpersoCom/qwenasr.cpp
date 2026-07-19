@@ -25,15 +25,15 @@ load_backend: loaded CPU backend from /mnt/workspace/git/qwenasr.cpp/build/libgg
 [Dump] cpp/hidden.bin [497664 floats]
 [Dump] cpp/logits.bin [151936 floats]
 [Perf] Resample 0.1 ms
-[Perf] Mel 3.9 ms
-[Perf] Tower 258.6 ms
-[Perf] Build 0.5 ms (embed + audio splice)
-[Perf] Prefill 520.0 ms
-[Perf] Decode 839.8 ms (51 tokens, 16.47 ms/tok, 60.7 tok/s)
-[Perf] Total 1637.6 ms (audio 17.26 s, RTF 0.095)
+[Perf] Mel 3.7 ms
+[Perf] Tower 253.1 ms
+[Perf] Build 0.6 ms (embed + audio splice)
+[Perf] Prefill 519.1 ms
+[Perf] Decode 821.1 ms (51 tokens, 16.10 ms/tok, 62.1 tok/s)
+[Perf] Total 1603.5 ms (audio 17.26 s, RTF 0.093)
 [GGML] Cmd: ../build/qwenasr-transcribe --model ../models/qwenasr-1.7B-Q4_K_M.gguf --file ../examples/freeman.wav --lang English --dump cpp -o cpp/asr-cpp.txt
 [GGML] Text: "If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you're going to be with. You know, people say, well."
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 123.73it/s]
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 124.54it/s]
 The following generation flags are not valid and may be ignored: ['temperature']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
 Setting `pad_token_id` to `eos_token_id`:151645 for open-end generation.
 [Python] Text: 'If you go into different cultures, they have different concepts of creation. They have their own creation story and what an afterlife is, where you go, what you do, who you\'re going to be with. You know, people say, "Well."'
