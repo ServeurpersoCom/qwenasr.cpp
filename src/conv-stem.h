@@ -52,7 +52,8 @@ static void conv_stem_free(ConvStem * s) {
     }
 }
 
-// mel input ne = [n_frames, num_mel_bins, 1, 1] f32. Returns [d_model, n_out].
+// mel input ne = [n_frames, num_mel_bins, 1, n_batch] f32, one mel chunk per
+// batch slot. Returns [d_model, n_out, n_batch].
 static struct ggml_tensor * conv_stem_build(struct ggml_context * ctx, const ConvStem & s, struct ggml_tensor * mel) {
     struct ggml_tensor * x = mel;
 
@@ -68,12 +69,13 @@ static struct ggml_tensor * conv_stem_build(struct ggml_context * ctx, const Con
     x = ggml_add(ctx, x, ggml_reshape_4d(ctx, s.conv3_b, 1, 1, s.conv3_b->ne[0], 1));
     x = ggml_gelu_erf(ctx, x);
 
-    // x: [t_out, freq=16, chan=480, 1] -> [freq, chan, t_out] -> [7680, t_out]
+    // x: [t_out, freq=16, chan=480, n] -> [freq, chan, t_out, n] -> [7680, t_out, n]
     // contiguous order puts frequency inner and channel outer, matching the
-    // reference permute(0,3,1,2).view(b, t, c * f).
+    // reference permute(0,3,1,2).view(b, t, c * f). conv_out broadcasts over
+    // the batch dim.
     x                   = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));
     const int64_t t_out = x->ne[2];
-    x                   = ggml_reshape_2d(ctx, x, x->ne[0] * x->ne[1], t_out);
-    x                   = ggml_mul_mat(ctx, s.conv_out, x);  // [896, t_out]
+    x                   = ggml_reshape_3d(ctx, x, x->ne[0] * x->ne[1], t_out, x->ne[3]);
+    x                   = ggml_mul_mat(ctx, s.conv_out, x);  // [896, t_out, n]
     return x;
 }

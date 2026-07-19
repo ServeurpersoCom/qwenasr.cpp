@@ -1,10 +1,11 @@
 #pragma once
 // audio-tower.h: windowed forward of the Qwen3-ASR audio tower. Splits the mel
-// into chunk_mel = n_window * 2 frame chunks, runs the conv stem per chunk with
-// the positional table reset per chunk, concatenates the after-cnn frames and
-// runs the encoder with a block-diagonal attention mask over windows of
-// window_aftercnn = chunk_aftercnn * window_chunks frames (100 and 104 on the
-// public checkpoints). Ties conv-stem.h and audio-enc.h into one graph.
+// into chunk_mel = n_window * 2 frame chunks, runs one batched conv stem pass
+// over the full chunks (plus the shorter tail alone) with the positional table
+// reset per chunk, concatenates the after-cnn frames and runs the encoder with
+// a block-diagonal attention mask over windows of window_aftercnn =
+// chunk_aftercnn * window_chunks frames (100 and 104 on the public
+// checkpoints). Ties conv-stem.h and audio-enc.h into one graph.
 
 #include "audio-enc.h"
 #include "conv-stem.h"
@@ -82,10 +83,14 @@ static std::vector<float> audio_tower_build_mask(int seq_len, int window_aftercn
 }
 
 // Build the windowed tower graph. mel_in [n_frames, n_mels, 1, 1], pe_chunk_in
-// [d_model, chunk_aftercnn] is the positional table sliced per chunk, mask_in
-// [S, S] is the block-diagonal mask. chunk_lengths is the host chunk plan.
-// Returns the projected states [output_dim, S]. stem_out, when not null,
-// captures the pre encoder stem sequence [d_model, S_stem] for a debug dump.
+// [d_model, chunk_aftercnn] is the positional table shared by every chunk,
+// mask_in [S, S] is the block-diagonal mask. chunk_lengths is the host chunk
+// plan: every chunk is chunk_mel frames except a possible shorter tail. The
+// full chunks run as one batched stem pass [chunk_mel, n_mels, 1, n_full] and
+// the tail runs alone behind it, so the graph node count stays constant in the
+// audio duration. Returns the projected states [output_dim, S]. stem_out, when
+// not null, captures the pre encoder stem sequence [d_model, S_stem] for a
+// debug dump.
 static struct ggml_tensor * audio_tower_build(struct ggml_context *    ctx,
                                               const ConvStem &         stem,
                                               const AudioEnc &         enc,
@@ -97,18 +102,33 @@ static struct ggml_tensor * audio_tower_build(struct ggml_context *    ctx,
     const int64_t n_mels  = mel_in->ne[1];
     const int     d_model = enc.cfg.d_model;
 
+    const int n_chunks  = (int) chunk_lengths.size();
+    const int chunk_mel = chunk_lengths[0];
+    const int tail_len  = chunk_lengths[(size_t) n_chunks - 1];
+    const int n_full    = tail_len == chunk_mel ? n_chunks : n_chunks - 1;
+
     struct ggml_tensor * seq = nullptr;
-    int64_t              off = 0;
-    for (int len : chunk_lengths) {
-        struct ggml_tensor * chunk =
-            ggml_cont(ctx, ggml_view_4d(ctx, mel_in, len, n_mels, 1, 1, mel_in->nb[1], mel_in->nb[2], mel_in->nb[3],
-                                        (size_t) off * mel_in->nb[0]));
-        struct ggml_tensor * s   = conv_stem_build(ctx, stem, chunk);  // [d_model, t_c]
+    if (n_full > 0) {
+        struct ggml_tensor * body =
+            ggml_cont(ctx, ggml_view_4d(ctx, mel_in, chunk_mel, n_mels, 1, n_full, mel_in->nb[1], mel_in->nb[2],
+                                        (size_t) chunk_mel * mel_in->nb[0], 0));
+        struct ggml_tensor * s   = conv_stem_build(ctx, stem, body);  // [d_model, t_c, n_full]
+        const int64_t        t_c = s->ne[1];
+        struct ggml_tensor * pe  = ggml_view_2d(ctx, pe_chunk_in, d_model, t_c, pe_chunk_in->nb[1], 0);
+        s                        = ggml_add(ctx, s, pe);  // pe broadcast over the batch dim
+        seq                      = ggml_reshape_2d(ctx, s, d_model, t_c * (int64_t) n_full);
+    }
+    if (tail_len != chunk_mel) {
+        const int64_t        off = (int64_t) n_full * chunk_mel;
+        struct ggml_tensor * tail =
+            ggml_cont(ctx, ggml_view_4d(ctx, mel_in, tail_len, n_mels, 1, 1, mel_in->nb[1], mel_in->nb[2],
+                                        mel_in->nb[3], (size_t) off * mel_in->nb[0]));
+        struct ggml_tensor * s   = conv_stem_build(ctx, stem, tail);  // [d_model, t_c, 1]
         const int64_t        t_c = s->ne[1];
         struct ggml_tensor * pe  = ggml_view_2d(ctx, pe_chunk_in, d_model, t_c, pe_chunk_in->nb[1], 0);
         s                        = ggml_add(ctx, s, pe);
+        s                        = ggml_reshape_2d(ctx, s, d_model, t_c);
         seq                      = seq ? ggml_concat(ctx, seq, s, 1) : s;
-        off += len;
     }
 
     if (stem_out) {
