@@ -160,8 +160,8 @@ static struct ggml_tensor * audio_mel_build_graph(struct ggml_context *  ctx,
 
     struct ggml_tensor * spec_re = ggml_mul_mat(ctx, dft_real, frames);  // [n_freq, n_frames]
     struct ggml_tensor * spec_im = ggml_mul_mat(ctx, dft_imag, frames);
-    ggml_mul_mat_set_prec(spec_re, GGML_PREC_F32);
-    ggml_mul_mat_set_prec(spec_im, GGML_PREC_F32);
+    ggml_prec_set_acc(spec_re, GGML_PREC_F32);
+    ggml_prec_set_acc(spec_im, GGML_PREC_F32);
 
     // Whisper uses the power spectrum (magnitude squared), no sqrt, no eps.
     struct ggml_tensor * power = ggml_add(ctx, ggml_sqr(ctx, spec_re), ggml_sqr(ctx, spec_im));
@@ -169,7 +169,7 @@ static struct ggml_tensor * audio_mel_build_graph(struct ggml_context *  ctx,
     // power [n_freq, n_frames] x mel_basis [n_freq, n_mels] -> [n_frames,
     // n_mels], memory n_mels outer / frame inner, the layout the conv stem reads.
     struct ggml_tensor * mel = ggml_mul_mat(ctx, power, mel_basis);
-    ggml_mul_mat_set_prec(mel, GGML_PREC_F32);
+    ggml_prec_set_acc(mel, GGML_PREC_F32);
 
     mel = ggml_clamp(ctx, mel, 1e-10f, 1e30f);
     mel = ggml_log(ctx, mel);
