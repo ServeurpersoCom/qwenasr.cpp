@@ -320,18 +320,14 @@ static int main_impl(int argc, char ** argv) {
             cfg.clamp_fp16 = true;
         } else if (strcmp(argv[i], "--no-fa") == 0) {
             cfg.flash_attn = false;
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            print_usage(argv[0]);
-            return 0;
         } else {
-            fprintf(stderr, "[CLI] ERROR: unknown arg: %s\n", argv[i]);
             print_usage(argv[0]);
-            return 2;
+            return 1;
         }
     }
     if (cfg.model_path.empty()) {
         print_usage(argv[0]);
-        return 2;
+        return 1;
     }
 
     struct qa_init_params ip = qa_init_default_params();

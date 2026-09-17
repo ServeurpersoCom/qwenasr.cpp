@@ -53,7 +53,7 @@ static void print_usage(const char * prog) {
 static int main_impl(int argc, char ** argv) {
     if (argc < 2) {
         print_usage(argv[0]);
-        return 2;
+        return 1;
     }
 
     const char * model_path  = nullptr;
@@ -100,18 +100,14 @@ static int main_impl(int argc, char ** argv) {
             flash_attn = false;
         } else if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            print_usage(argv[0]);
-            return 0;
         } else {
-            fprintf(stderr, "[CLI] ERROR: unknown arg: %s\n", argv[i]);
             print_usage(argv[0]);
-            return 2;
+            return 1;
         }
     }
     if (!model_path || !file_path) {
         print_usage(argv[0]);
-        return 2;
+        return 1;
     }
 
     int     n_samples = 0;
