@@ -5,6 +5,7 @@
 
 #include "qwenasr.h"
 
+#include "lang-map.h"
 #include "pipeline-asr.h"
 #include "qa-error.h"
 #include "version.h"
@@ -170,6 +171,18 @@ enum qa_status qa_transcribe(qa_context *                        ctx,
     memcpy(buf, text.c_str(), text.size() + 1);
     *out_text = buf;
     return QA_STATUS_OK;
+}
+
+int qa_n_languages(void) {
+    return (int) supported_languages().size();
+}
+
+const char * qa_language_name(int i) {
+    const std::vector<std::string> & languages = supported_languages();
+    if (i < 0 || i >= (int) languages.size()) {
+        return NULL;
+    }
+    return languages[(size_t) i].c_str();
 }
 
 void qa_free_text(char * text) {

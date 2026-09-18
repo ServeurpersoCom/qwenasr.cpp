@@ -4,9 +4,11 @@
 // then accept only the supported names. The prompt receives the canonical name
 // itself, empty leaves the model to detect the language.
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 static const std::unordered_set<std::string> SUPPORTED_LANGUAGES = {
     "Chinese",    "English", "Cantonese", "Arabic",   "German",    "French",     "Spanish",  "Portuguese",
@@ -14,6 +16,18 @@ static const std::unordered_set<std::string> SUPPORTED_LANGUAGES = {
     "Hindi",      "Malay",   "Dutch",     "Swedish",  "Danish",    "Finnish",    "Polish",   "Czech",
     "Filipino",   "Persian", "Greek",     "Romanian", "Hungarian", "Macedonian",
 };
+
+// Sorted view of the same set, for the enumeration the ABI exposes: an
+// unordered_set has no stable order, and a selector that reshuffles between
+// two runs is unusable.
+static inline const std::vector<std::string> & supported_languages() {
+    static const std::vector<std::string> sorted = [] {
+        std::vector<std::string> out(SUPPORTED_LANGUAGES.begin(), SUPPORTED_LANGUAGES.end());
+        std::sort(out.begin(), out.end());
+        return out;
+    }();
+    return sorted;
+}
 
 // Canonical casing: first byte upper, the rest lower. The fold is ASCII only,
 // multibyte UTF-8 bytes stay >= 0x80 and pass through untouched, so unsupported

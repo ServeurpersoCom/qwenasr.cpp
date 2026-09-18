@@ -132,6 +132,12 @@ QA_API enum qa_status qa_transcribe(qa_context *                        ctx,
 
 QA_API void qa_free_text(char * text);
 
+// Languages the recognizer accepts as a forced hint, sorted by name. A NULL
+// or unsupported hint leaves the model to detect one, so "auto" is not an
+// entry here. The pointers are static and outlive any context.
+QA_API int          qa_n_languages(void);
+QA_API const char * qa_language_name(int i);
+
 #ifdef __cplusplus
 }
 #endif
