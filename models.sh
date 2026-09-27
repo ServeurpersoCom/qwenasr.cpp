@@ -4,7 +4,7 @@
 
 set -eu
 
-REPO="Serveurperso/qwenasr.cpp-GGUF"
+REPO="Serveurperso/Qwen3-ASR-GGUF"
 DIR="models"
 mkdir -p "$DIR"
 
