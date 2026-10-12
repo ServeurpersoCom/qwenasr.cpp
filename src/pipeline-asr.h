@@ -18,6 +18,7 @@ struct pipeline_asr_params {
     bool        use_gpu    = true;
     bool        clamp_fp16 = false;
     bool        flash_attn = true;
+    std::string device;    // GGML device by name, empty for the best available one
     std::string dump_dir;  // when set, write the stage tensors there as f32 dumps
 };
 

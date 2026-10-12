@@ -259,7 +259,7 @@ pipeline_asr * pipeline_asr_load(const pipeline_asr_params & params) {
     p->clamp_fp16    = params.clamp_fp16;
     p->dump_dir      = params.dump_dir;
 
-    p->backend = backend_init("Pipeline");
+    p->backend = backend_init("Pipeline", params.device.empty() ? nullptr : params.device.c_str());
     if (!p->backend.backend) {
         delete p;
         qa_throw("pipeline_asr_load: no backend");

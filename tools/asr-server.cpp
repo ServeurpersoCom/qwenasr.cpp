@@ -15,6 +15,7 @@
 // transcript for text.
 
 #include "audio-io.h"
+#include "backend.h"
 #include "httplib.h"
 #include "qwenasr.h"
 #include "utf8.h"
@@ -297,6 +298,8 @@ static void print_usage(const char * prog) {
             "Required:\n"
             "  --model <gguf>     Qwen3-ASR GGUF\n\n"
             "Optional:\n"
+            "  --device <name>    Compute device: CUDA0, Vulkan0, MTL0, CPU...\n"
+            "                     (default: best available)\n"
             "  --host <addr>      Bind address (default: 127.0.0.1)\n"
             "  --port <n>         Bind port (default: 8090)\n"
             "  --lang <code>      Default language hint (default: auto detect)\n"
@@ -307,9 +310,12 @@ static void print_usage(const char * prog) {
 
 static int main_impl(int argc, char ** argv) {
     server_config cfg;
+    const char *  device = nullptr;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
             cfg.model_path = argv[++i];
+        } else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
+            device = argv[++i];
         } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
             cfg.host = argv[++i];
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -329,11 +335,16 @@ static int main_impl(int argc, char ** argv) {
         print_usage(argv[0]);
         return 1;
     }
+    if (device && !backend_check_device(device)) {
+        print_usage(argv[0]);
+        return 1;
+    }
 
     struct qa_init_params ip = qa_init_default_params();
     ip.model_path            = cfg.model_path.c_str();
     ip.clamp_fp16            = cfg.clamp_fp16;
     ip.flash_attn            = cfg.flash_attn;
+    ip.device                = device;
 
     g_ctx = qa_init(&ip);
     if (!g_ctx) {

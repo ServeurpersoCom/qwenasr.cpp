@@ -10,7 +10,9 @@
 #
 # Reference runs CPU fp32 in this interpreter, needs transformers 4.57.6.
 # Run from tests/ with the GGUF under test, eg:
-#   GGML_BACKEND=CUDA0 ./debug-asr-cossim.py --model ../models/qwenasr-1.7B-BF16.gguf
+#   ./debug-asr-cossim.py --device CUDA0 --model ../models/qwenasr-1.7B-BF16.gguf
+# --bin <path> picks another qwenasr-transcribe, --ref-dtype float32 upcasts
+# the reference.
 
 import difflib
 import os
@@ -20,15 +22,13 @@ import sys
 
 import numpy as np
 
-TRANSCRIBE = os.environ.get("QA_TRANSCRIBE", "../build/qwenasr-transcribe")
-
-
 def _arg(name, default):
     if name in sys.argv and sys.argv.index(name) + 1 < len(sys.argv):
         return sys.argv[sys.argv.index(name) + 1]
     return default
 
 
+TRANSCRIBE = _arg("--bin", "../build/qwenasr-transcribe")
 MODEL = _arg("--model", "../models/qwenasr-1.7B-BF16.gguf")
 SIZE = "1.7B" if "1.7B" in MODEL else "0.6B"
 REF_DIR = f"../checkpoints/Qwen3-ASR-{SIZE}"
@@ -36,6 +36,8 @@ EXAMPLE_WAV = "../examples/freeman.wav"
 DUMP_CPP = "cpp"
 DUMP_PT = "python"
 FA_ARGS = ["--no-fa"] if "--no-fa" in sys.argv else []
+DEVICE_ARGS = ["--device", _arg("--device", None)] if "--device" in sys.argv else []
+REF_DTYPE = _arg("--ref-dtype", "bfloat16")
 
 # Audio frontend and decoder prefill stages. Each name is the dump file written
 # by qwenasr-transcribe --dump on the C++ side and by the hooks on the reference
@@ -129,7 +131,7 @@ def main():
 
     out_cpp = os.path.join(DUMP_CPP, "asr-cpp.txt")
     cmd = [TRANSCRIBE, "--model", MODEL, "--file", EXAMPLE_WAV,
-           "--lang", "English", "--dump", DUMP_CPP, "-o", out_cpp] + FA_ARGS
+           "--lang", "English", "--dump", DUMP_CPP, "-o", out_cpp] + FA_ARGS + DEVICE_ARGS
     print(f"[GGML] Cmd: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     cpp_text = open(out_cpp, encoding="utf-8").read().strip()
@@ -139,9 +141,9 @@ def main():
     from qwen_asr import Qwen3ASRModel
 
     # The reference runs in the checkpoint native bf16 by default so the stage
-    # cosines compare the same arithmetic the BF16 GGUF runs. QA_REF_DTYPE=float32
+    # cosines compare the same arithmetic the BF16 GGUF runs. --ref-dtype float32
     # upcasts the reference to expose the BF16 quantization drift instead.
-    ref_dtype = getattr(torch, os.environ.get("QA_REF_DTYPE", "bfloat16"))
+    ref_dtype = getattr(torch, REF_DTYPE)
 
     # Both pipelines consume the exact 16k samples the C++ resampler produced,
     # dumped as pcm16.bin, so no second resampler diverges the mel inputs.

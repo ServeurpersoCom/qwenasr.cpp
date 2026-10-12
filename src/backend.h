@@ -1,8 +1,8 @@
 #pragma once
 // backend.h: GGML backend initialization
 //
-// All modules use the same pattern: load all backends, pick best GPU,
-// keep CPU as fallback. Each backend_init call returns a fresh backend
+// All modules use the same pattern: load all backends, take the device
+// the caller names or the best available one, keep CPU as fallback. Each backend_init call returns a fresh backend
 // pair with its own device context and memory pool, so independent
 // qa_contexts never share allocator state and can run concurrently.
 // Sharing within one pipeline is done by passing the same BackendPair
@@ -60,12 +60,6 @@ static ggml_backend_t cpu_backend_new(int n_threads) {
     return cpu;
 }
 
-// Initialize backends: load all available (CUDA, Metal, Vulkan...),
-// pick the best one, keep CPU as fallback.
-// label: log prefix, e.g. "Pipeline", "Audio", "Thinker"
-// Each call returns a fresh backend pair with its own memory pool.
-// Returns a BackendPair with .backend == NULL when initialisation fails;
-// the caller must check this before passing it to any pipeline_*_load.
 // Collapse exact consecutive duplicate ggml log lines and report the total
 // count when the run ends (tames the CUDA graph capture "reused" flood).
 static void qa_ggml_log(enum ggml_log_level level, const char * text, void * user_data) {
@@ -90,43 +84,53 @@ static void qa_ggml_log(enum ggml_log_level level, const char * text, void * use
     fflush(stderr);
 }
 
-static BackendPair backend_init(const char * label) {
-    // Magic static: log callback install and dynamic backend loading
-    // happen exactly once, safe under concurrent init calls.
+// Install the log callback and load every backend. Magic static: it
+// happens exactly once, safe under concurrent init calls.
+static void backend_load(void) {
     static const bool loaded = [] {
         ggml_log_set(qa_ggml_log, nullptr);
         ggml_backend_load_all();
         return true;
     }();
     (void) loaded;
+}
+
+// True when name matches a device (CUDA0, Vulkan0, MTL0, CPU...), the
+// check of a --device argument. Otherwise logs the available devices on
+// one self-contained line and returns false.
+static bool backend_check_device(const char * name) {
+    backend_load();
+    if (ggml_backend_dev_by_name(name)) {
+        return true;
+    }
+    std::string msg = "--device ";
+    msg += name;
+    msg += " not found. Available:";
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        msg += ' ';
+        msg += ggml_backend_dev_name(ggml_backend_dev_get(i));
+    }
+    qa_log(QA_LOG_ERROR, "%s", msg.c_str());
+    return false;
+}
+
+// Initialize backends: the device named by device, or the best available
+// one (CUDA, Metal, Vulkan...) when device is NULL, keep CPU as fallback.
+// label: log prefix, e.g. "Pipeline", "Audio", "Thinker"
+// Each call returns a fresh backend pair with its own memory pool.
+// Returns a BackendPair with .backend == NULL when initialisation fails;
+// the caller must check this before passing it to any pipeline_*_load.
+static BackendPair backend_init(const char * label, const char * device) {
+    backend_load();
 
     BackendPair bp = {};
-
-    // GGML_BACKEND env var: force a specific device instead of auto-best.
-    // Device names: CUDA0, Vulkan0, CPU, BLAS (see ggml_backend_dev_name).
-    const char * force_backend = std::getenv("GGML_BACKEND");
-    if (force_backend) {
-        bp.backend = ggml_backend_init_by_name(force_backend, nullptr);
-        if (!bp.backend) {
-            // Assemble the device list inline so the log callback gets one
-            // self-contained line instead of three. The available list can
-            // grow with each backend that registers, so a std::string here
-            // keeps the formatting allocation-free for the common case.
-            std::string msg = "[Load] GGML_BACKEND=";
-            msg += force_backend;
-            msg += " not found. Available:";
-            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-                msg += ' ';
-                msg += ggml_backend_dev_name(ggml_backend_dev_get(i));
-            }
-            qa_log(QA_LOG_ERROR, "%s", msg.c_str());
-            return BackendPair{};
-        }
-    } else {
-        bp.backend = ggml_backend_init_best();
-    }
+    bp.backend     = device ? ggml_backend_init_by_name(device, nullptr) : ggml_backend_init_best();
     if (!bp.backend) {
-        qa_log(QA_LOG_ERROR, "[Load] no backend available");
+        if (device) {
+            qa_log(QA_LOG_ERROR, "[Load] device %s not available", device);
+        } else {
+            qa_log(QA_LOG_ERROR, "[Load] no backend available");
+        }
         return BackendPair{};
     }
     bool best_is_cpu = (strcmp(ggml_backend_name(bp.backend), "CPU") == 0);

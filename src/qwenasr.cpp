@@ -86,6 +86,7 @@ struct qa_init_params qa_init_default_params(void) {
     p.use_gpu     = true;
     p.clamp_fp16  = false;
     p.flash_attn  = true;
+    p.device      = nullptr;
     return p;
 }
 
@@ -122,6 +123,11 @@ qa_context * qa_init(const struct qa_init_params * params) {
         pp.use_gpu    = params->use_gpu;
         pp.clamp_fp16 = params->clamp_fp16;
         pp.flash_attn = params->flash_attn;
+        // The device field exists from ABI 2, an older struct takes the
+        // best available device.
+        if (params->abi_version >= 2 && params->device) {
+            pp.device = params->device;
+        }
 
         qa_context * ctx = new qa_context{ pipeline_asr_load(pp) };
         qa_log(QA_LOG_INFO, "[qwenasr] qwenasr.cpp %s", qa_version());

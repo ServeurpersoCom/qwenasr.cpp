@@ -13,7 +13,7 @@ int main(void) {
     }
 
     struct qa_init_params ip = qa_init_default_params();
-    if (ip.abi_version != QA_ABI_VERSION) {
+    if (ip.abi_version != QA_ABI_VERSION || ip.device) {
         return 1;
     }
 

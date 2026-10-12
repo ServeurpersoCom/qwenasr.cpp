@@ -405,12 +405,14 @@ Required:
   --file <wav>            Input audio, any rate (resampled to 16 kHz mono)
 
 Optional:
+  --device <name>         Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                          (default: best available)
   --lang <code>           Language hint, ISO code or name (default: auto detect)
   --context <txt>         System context for biasing the transcript
   --max-tokens <n>        Decode budget in tokens (default: 512)
-  -o <path>               Output transcript file (stdout otherwise)
+  -o <path>               Write transcript to a file instead of stdout
 
-Sampling:
+Sampling (greedy by default, matching the reference):
   --temp <t>              Temperature, <= 0 stays greedy (default: 0)
   --top-k <k>             Keep the top k logits, 0 disables (default: 0)
   --top-p <p>             Nucleus probability, 1.0 disables (default: 1.0)
@@ -432,6 +434,8 @@ Required:
   --model <gguf>     Qwen3-ASR GGUF
 
 Optional:
+  --device <name>    Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                     (default: best available)
   --host <addr>      Bind address (default: 127.0.0.1)
   --port <n>         Bind port (default: 8090)
   --lang <code>      Default language hint (default: auto detect)

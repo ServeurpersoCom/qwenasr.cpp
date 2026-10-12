@@ -1,10 +1,11 @@
 // qwenasr-transcribe: wav -> text. Reads a file as mono PCM, resampled to
 // 16 kHz, runs one transcription, writes the transcript to stdout or to -o.
 // Normal runs go through the public ABI in qwenasr.h. With --dump it drives the
-// pipeline directly to write the stage tensors. Backend selection follows the
-// GGML_BACKEND env var, CPU otherwise.
+// pipeline directly to write the stage tensors. --device picks the GGML
+// device, the best available one otherwise.
 
 #include "audio-io.h"
+#include "backend.h"
 #include "pipeline-asr.h"
 #include "qwenasr.h"
 #include "utf8.h"
@@ -26,6 +27,8 @@ static void print_usage(const char * prog) {
             "  --file <wav>            Input audio, any rate (resampled to 16 kHz "
             "mono)\n\n"
             "Optional:\n"
+            "  --device <name>         Compute device: CUDA0, Vulkan0, MTL0, CPU...\n"
+            "                          (default: best available)\n"
             "  --lang <code>           Language hint, ISO code or name (default: "
             "auto "
             "detect)\n"
@@ -62,6 +65,7 @@ static int main_impl(int argc, char ** argv) {
     const char * context     = nullptr;
     const char * out_path    = nullptr;
     const char * dump_dir    = nullptr;
+    const char * device      = nullptr;
     int          max_tokens  = 0;
     float        temperature = 0.0f;
     int          top_k       = 0;
@@ -76,6 +80,8 @@ static int main_impl(int argc, char ** argv) {
             model_path = argv[++i];
         } else if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
             file_path = argv[++i];
+        } else if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
+            device = argv[++i];
         } else if (strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
             lang = argv[++i];
         } else if (strcmp(argv[i], "--context") == 0 && i + 1 < argc) {
@@ -109,6 +115,10 @@ static int main_impl(int argc, char ** argv) {
         print_usage(argv[0]);
         return 1;
     }
+    if (device && !backend_check_device(device)) {
+        print_usage(argv[0]);
+        return 1;
+    }
 
     int     n_samples = 0;
     float * pcm       = audio_read_mono(file_path, 16000, &n_samples);
@@ -135,10 +145,13 @@ static int main_impl(int argc, char ** argv) {
     qa_status   rc;
     if (dump_dir) {
         pipeline_asr_params pp;
-        pp.model_path       = model_path;
-        pp.clamp_fp16       = clamp_fp16;
-        pp.flash_attn       = flash_attn;
-        pp.dump_dir         = dump_dir;
+        pp.model_path = model_path;
+        pp.clamp_fp16 = clamp_fp16;
+        pp.flash_attn = flash_attn;
+        pp.dump_dir   = dump_dir;
+        if (device) {
+            pp.device = device;
+        }
         pipeline_asr * pipe = pipeline_asr_load(pp);
         rc                  = pipeline_asr_run(pipe, pcm, (size_t) n_samples, 16000, &tp, text);
         pipeline_asr_free(pipe);
@@ -147,6 +160,7 @@ static int main_impl(int argc, char ** argv) {
         ip.model_path            = model_path;
         ip.clamp_fp16            = clamp_fp16;
         ip.flash_attn            = flash_attn;
+        ip.device                = device;
         qa_context * ctx         = qa_init(&ip);
         if (!ctx) {
             fprintf(stderr, "[CLI] ERROR: qa_init: %s\n", qa_last_error());

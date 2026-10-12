@@ -39,7 +39,7 @@ extern "C" {
 // its tail. Callers set .abi_version = QA_ABI_VERSION or let the
 // qa_*_default_params helpers fill it. Entries reject inputs whose
 // abi_version exceeds the build-time constant.
-#define QA_ABI_VERSION 1
+#define QA_ABI_VERSION 2
 
 // Default decode budget, the Qwen3-ASR reference inference default
 // (qwen_asr/inference/qwen3_asr.py). The decoder stops at im_end on its own,
@@ -87,6 +87,8 @@ struct qa_init_params {
     bool         clamp_fp16;  // clamp hidden states to the FP16 range on backends that
                               // need it
     bool         flash_attn;  // enable flash attention in the graph
+    const char * device;      // GGML device by name (CUDA0, Vulkan0, MTL0, CPU...),
+                              // NULL for the best available one, since ABI 2
 };
 
 QA_API struct qa_init_params qa_init_default_params(void);
