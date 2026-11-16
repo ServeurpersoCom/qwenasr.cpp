@@ -124,13 +124,19 @@ static struct ggml_tensor * thinker_layer_forward(struct ggml_context *  ctx,
     struct ggml_tensor * h = ggml_rms_norm(ctx, x, eps);
     h                      = ggml_mul(ctx, h, layer.input_norm_w);
 
-    struct ggml_tensor * q = ggml_mul_mat(ctx, layer.attn.q_proj_w, h);  // [n_q_heads*hd, T]
-    struct ggml_tensor * k = ggml_mul_mat(ctx, layer.attn.k_proj_w, h);  // [n_kv*hd, T]
-    struct ggml_tensor * v = ggml_mul_mat(ctx, layer.attn.v_proj_w, h);  // [n_kv*hd, T]
-
-    q = ggml_reshape_3d(ctx, q, hd, n_q_heads, T);                       // [hd, n_q_heads, T]
-    k = ggml_reshape_3d(ctx, k, hd, n_kv, T);
-    v = ggml_reshape_3d(ctx, v, hd, n_kv, T);
+    // [hd, heads, T], views of one matmul with the fused weight
+    struct ggml_tensor *q, *k, *v;
+    if (layer.attn.qkv_w) {
+        struct ggml_tensor * qkv  = ggml_mul_mat(ctx, layer.attn.qkv_w, h);
+        const size_t         head = hd * ggml_element_size(qkv);
+        q                         = ggml_view_3d(ctx, qkv, hd, n_q_heads, T, head, qkv->nb[1], 0);
+        k                         = ggml_view_3d(ctx, qkv, hd, n_kv, T, head, qkv->nb[1], n_q_heads * head);
+        v                         = ggml_view_3d(ctx, qkv, hd, n_kv, T, head, qkv->nb[1], (n_q_heads + n_kv) * head);
+    } else {
+        q = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, layer.attn.q_proj_w, h), hd, n_q_heads, T);
+        k = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, layer.attn.k_proj_w, h), hd, n_kv, T);
+        v = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, layer.attn.v_proj_w, h), hd, n_kv, T);
+    }
 
     // Per-head QK-norm: RMS over hd, then a [hd] gain. Same path for q and k.
     q = ggml_rms_norm(ctx, q, eps);
@@ -146,8 +152,8 @@ static struct ggml_tensor * thinker_layer_forward(struct ggml_context *  ctx,
     // Write the T fresh K/V into the cache via set_rows. K and V are
     // [hd, n_kv, T] at this point and the cache lives as [hd, max_T, n_kv] so we
     // permute to [hd, T, n_kv]; the row ids broadcast across the n_kv head dim.
-    struct ggml_tensor * k_perm = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [hd, T, n_kv]
-    struct ggml_tensor * v_perm = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+    struct ggml_tensor * k_perm = ggml_permute(ctx, k, 0, 2, 1, 3);  // [hd, T, n_kv]
+    struct ggml_tensor * v_perm = ggml_permute(ctx, v, 0, 2, 1, 3);
 
     ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_cache, k_perm, kv_rows));
     ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_cache, v_perm, kv_rows));

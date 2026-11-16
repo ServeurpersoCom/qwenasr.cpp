@@ -14,6 +14,7 @@
 #include <vector>
 
 struct ThinkerAttention {
+    struct ggml_tensor * qkv_w;  // fused [H, q + k + v] of a quantized or F32 checkpoint, else NULL
     struct ggml_tensor * q_proj_w;
     struct ggml_tensor * k_proj_w;
     struct ggml_tensor * v_proj_w;
@@ -90,15 +91,23 @@ static bool thinker_weights_load(ThinkerWeights * tw, const GGUFModel & gf, ggml
         const std::string p     = "thinker.blk." + std::to_string(l) + ".";
         layer.input_norm_w      = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_norm.weight");
         layer.post_attn_norm_w  = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_norm.weight");
-        layer.attn.q_proj_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_q.weight");
-        layer.attn.k_proj_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_k.weight");
-        layer.attn.v_proj_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_v.weight");
-        layer.attn.o_proj_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_output.weight");
-        layer.attn.q_norm_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_q_norm.weight");
-        layer.attn.k_norm_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_k_norm.weight");
-        layer.mlp.gate_proj_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_gate.weight");
-        layer.mlp.up_proj_w     = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_up.weight");
-        layer.mlp.down_proj_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_down.weight");
+        // the fused weight keeps the stored type, BF16 and F16 projections load apart as F32
+        const ggml_type qt      = gf_get_type(gf, p + "attn_q.weight");
+        layer.attn.qkv_w =
+            qt == GGML_TYPE_BF16 || qt == GGML_TYPE_F16 ?
+                nullptr :
+                gf_load_qkv_fused(&tw->wctx, gf, p + "attn_q.weight", p + "attn_k.weight", p + "attn_v.weight");
+        if (!layer.attn.qkv_w) {
+            layer.attn.q_proj_w = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_q.weight");
+            layer.attn.k_proj_w = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_k.weight");
+            layer.attn.v_proj_w = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_v.weight");
+        }
+        layer.attn.o_proj_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_output.weight");
+        layer.attn.q_norm_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_q_norm.weight");
+        layer.attn.k_norm_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "attn_k_norm.weight");
+        layer.mlp.gate_proj_w = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_gate.weight");
+        layer.mlp.up_proj_w   = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_up.weight");
+        layer.mlp.down_proj_w = gf_load_tensor_f32(&tw->wctx, gf, p + "ffn_down.weight");
     }
 
     if (!wctx_alloc(&tw->wctx, backend)) {
